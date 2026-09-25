@@ -104,12 +104,15 @@
   section: [Конструкции],
   body: [
 Огромные розетки заполняли светом восточную часть храма; диаметр розетки
+
+
 Шартрского собора превышает двенадцать метров.
 
-
-#image("assets/rose-window.jpg") #image("assets/rose-window.jpg")
-
   ],
+)
+
+#gallery-slide(
+  ((path: "assets/chart.jpg", caption: [Динамика высоты нефа по десятилетиям]), (path: "assets/rose-window.jpg", caption: [Розетка Шартрского собора]), (path: "assets/rose-window.jpg", caption: [Розетка Шартрского собора]), (path: "assets/rose-window.jpg", caption: [Розетка Шартрского собора]), ),
 )
 
 #content-slide(
@@ -143,7 +146,7 @@ align(center)[#table(
   images: ((path: "assets/chart.jpg", caption: [Динамика высоты нефа по десятилетиям]), ),
   body: [
 Диаграмма справа — вертикальная, поэтому движок отдаёт ей боковую
-колонку на всю высоту, а текст сжимается в левую.
+колонку на #strong[всю высоту];, а текст сжимается в левую.
 
   ],
 )
@@ -163,8 +166,3 @@ align(center)[#table(
 )
 
 #focus-slide[Собор — это машина для света]
-
-#content-slide(
-  title: [Итог],
-  section: [Практика],
-)

@@ -63,35 +63,54 @@ local function ser_blocks_list(blocks)
   return table.concat(parts, "\n\n")
 end
 
--- A standalone image block: a Figure wrapping a single Image, or a
--- Para/Plain whose only inline is an Image.
-local function as_image_tile(b)
-  local img, caption
+-- Standalone image blocks: a Figure, or a Para/Plain consisting ONLY of
+-- images (one or several, possibly separated by line breaks). Each becomes
+-- an image tile; captions come from the Figure caption or the image alt text.
+local function ignorable_inline(i)
+  return i.t == "Space" or i.t == "SoftBreak"
+end
+
+local function as_image_tiles(b)
+  local tiles = {}
   if b.t == "Figure" then
-    local inl = {}
+    local inl, imgs = {}, {}
     for _, blk in ipairs(b.content) do
       if blk.t == "Para" or blk.t == "Plain" then
         for _, i in ipairs(blk.content) do inl[#inl + 1] = i end
       end
     end
-    local imgs = {}
-    for _, i in ipairs(inl) do if i.t == "Image" then imgs[#imgs + 1] = i end end
-    if #inl == 1 and #imgs == 1 then
-      img = imgs[1]
-      local cap = b.caption
-      if cap ~= nil and cap.long ~= nil then cap = cap.long end
-      if cap ~= nil and #cap > 0 then caption = ser_blocks_list(cap) end
+    local only = true
+    for _, i in ipairs(inl) do
+      if i.t == "Image" then imgs[#imgs + 1] = i
+      elseif not ignorable_inline(i) then only = false end
+    end
+    if only and #imgs > 0 then
+      local cap
+      local capb = b.caption
+      if capb ~= nil and capb.long ~= nil then capb = capb.long end
+      if capb ~= nil and #capb > 0 then cap = ser_blocks_list(capb) end
+      for k, img in ipairs(imgs) do
+        tiles[#tiles + 1] = { path = img.src or "", caption = (k == 1) and cap or nil }
+      end
     end
   elseif b.t == "Para" or b.t == "Plain" then
-    if #b.content == 1 and b.content[1].t == "Image" then
-      img = b.content[1]
-      if img.caption and #img.caption > 0 then
-        caption = pandoc.write(pandoc.Pandoc({ pandoc.Plain(img.caption) }), "typst")
+    local imgs = {}
+    local only = true
+    for _, i in ipairs(b.content) do
+      if i.t == "Image" then imgs[#imgs + 1] = i
+      elseif not ignorable_inline(i) then only = false end
+    end
+    if only and #imgs > 0 then
+      for _, img in ipairs(imgs) do
+        local cap
+        if img.caption and #img.caption > 0 then
+          cap = pandoc.write(pandoc.Pandoc({ pandoc.Plain(img.caption) }), "typst")
+        end
+        tiles[#tiles + 1] = { path = img.src or "", caption = (cap ~= "" ) and cap or nil }
       end
     end
   end
-  if img == nil then return nil end
-  return { path = img.src or "", caption = (caption and caption ~= "") and caption or nil }
+  return tiles
 end
 
 function Pandoc(doc)
@@ -109,21 +128,13 @@ function Pandoc(doc)
   local out = {}
   local section, title = nil, nil
   local body_blocks, images = {}, {}
+  local emitted_for_title = false
 
-  local function flush(force)
-    local has_content = #body_blocks > 0 or #images > 0
-    if not has_content and not (force and title ~= nil) then
-      body_blocks, images = {}, {}
-      return
-    end
-    if title == nil and not has_content then
-      body_blocks, images = {}, {}
-      return
-    end
+  local function emit_content(include_images)
     local chunks = { "#content-slide(" }
     if title ~= nil then chunks[#chunks + 1] = "  title: [" .. title .. "]," end
     if section ~= nil then chunks[#chunks + 1] = "  section: [" .. section .. "]," end
-    if #images > 0 then
+    if include_images and #images > 0 then
       local ims = {}
       for _, im in ipairs(images) do
         local d = '(path: "' .. esc_str(im.path) .. '"'
@@ -137,7 +148,38 @@ function Pandoc(doc)
     end
     chunks[#chunks + 1] = ")"
     out[#out + 1] = table.concat(chunks, "\n")
+  end
+
+  local function emit_gallery()
+    local ims = {}
+    for _, im in ipairs(images) do
+      local d = '(path: "' .. esc_str(im.path) .. '"'
+      if im.caption then d = d .. ", caption: [" .. im.caption .. "]" end
+      ims[#ims + 1] = d .. "), "
+    end
+    out[#out + 1] = "#gallery-slide(\n  (" .. table.concat(ims) .. "),\n)"
+  end
+
+  local function flush(force)
+    local has_content = #body_blocks > 0 or #images > 0
+    if not has_content and not (force and title ~= nil and not emitted_for_title) then
+      body_blocks, images = {}, {}
+      return
+    end
+    if title == nil and not has_content then
+      body_blocks, images = {}, {}
+      return
+    end
+    if #images >= 2 then
+      -- Image-only mode: >=2 images move to a clean gallery slide;
+      -- accompanying text (if any) goes to a separate titled slide first.
+      if #body_blocks > 0 then emit_content(false) end
+      emit_gallery()
+    else
+      emit_content(true)
+    end
     body_blocks, images = {}, {}
+    if title ~= nil then emitted_for_title = true end
   end
 
   for _, b in ipairs(doc.blocks) do
@@ -150,6 +192,7 @@ function Pandoc(doc)
       elseif b.level == 2 then
         flush(true)
         title = ser_inlines(b.content)
+        emitted_for_title = false
       else
         body_blocks[#body_blocks + 1] = pandoc.Para(pandoc.Strong(b.content))
       end
@@ -158,15 +201,20 @@ function Pandoc(doc)
     elseif b.t == "RawBlock" and b.format == "typst" then
       flush(false)
       out[#out + 1] = b.text
+      -- the raw block acts as this slide's content: don't emit a phantom
+      -- title-only slide for it afterwards
+      if title ~= nil then emitted_for_title = true end
     else
-      local tile = as_image_tile(b)
-      if tile ~= nil then
-        if file_exists(tile.path) then
-          images[#images + 1] = tile
-        else
-          io.stderr:write("WARNING: image not found: ", tile.path, "\n")
-          body_blocks[#body_blocks + 1] =
-            pandoc.Plain(pandoc.RawInline("typst", placeholder_box("нет изображения: " .. tile.path)))
+      local tiles = as_image_tiles(b)
+      if #tiles > 0 then
+        for _, tile in ipairs(tiles) do
+          if file_exists(tile.path) then
+            images[#images + 1] = tile
+          else
+            io.stderr:write("WARNING: image not found: ", tile.path, "\n")
+            body_blocks[#body_blocks + 1] =
+              pandoc.Plain(pandoc.RawInline("typst", placeholder_box("нет изображения: " .. tile.path)))
+          end
         end
       else
         body_blocks[#body_blocks + 1] = b

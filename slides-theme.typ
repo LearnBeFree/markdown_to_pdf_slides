@@ -104,32 +104,6 @@
   })
 }
 
-#let _images-zone(self, images, width, height, stacked) = {
-  let n = images.len()
-  let g = _gutter / 2
-  if n == 1 {
-    _img-tile(self, images.at(0), width, height)
-  } else if stacked {
-    let rh = (height - (n - 1) * g) / n
-    grid(
-      rows: (rh,) * n,
-      row-gutter: g,
-      ..images.map(im => _img-tile(self, im, width, rh)),
-    )
-  } else {
-    let cols = if n <= 3 { n } else { calc.ceil(calc.sqrt(n)) }
-    let rows-n = calc.ceil(n / cols)
-    let cw = (width - (cols - 1) * g) / cols
-    let rh = (height - (rows-n - 1) * g) / rows-n
-    grid(
-      columns: (cw,) * cols,
-      rows: (rh,) * rows-n,
-      gutter: g,
-      ..images.map(im => _img-tile(self, im, cw, rh)),
-    )
-  }
-}
-
 #let _tile-layout(self, title, body, images) = layout(size => {
   let W = size.width
   let H = size.height
@@ -139,45 +113,147 @@
 
   if n == 0 {
     if has-text { align(top, _shrink(self, body, W, H)) } else { [] }
-  } else if n == 1 and not has-text {
+  } else if not has-text {
     align(center + horizon, _img-tile(self, images.at(0), W, H))
   } else {
-    let ars = images.map(im => _img-ar(_clean-path(im.at("path", default: ""))))
-    let avg-ar = ars.fold(0.0, (acc, a) => acc + a) / ars.len()
-    if avg-ar < 1.15 {
-      let zw = if n == 1 { calc.min(0.46 * W, H * ars.at(0)) } else { 0.46 * W }
+    let ar = _img-ar(_clean-path(images.at(0).at("path", default: "")))
+    if ar < 1.15 {
+      let zw = calc.min(0.46 * W, H * ar)
       let tw = W - zw - g
       grid(
         columns: (tw, zw),
         column-gutter: g,
         rows: (H,),
         align: (top + left, center + horizon),
-        if has-text { _shrink(self, body, tw, H) } else { [] },
-        _images-zone(self, images, zw, H, true),
+        _shrink(self, body, tw, H),
+        _img-tile(self, images.at(0), zw, H),
       )
     } else {
-      let zh = if n == 1 {
-        let base-h = if has-text {
-          measure(block(width: W, {
-            set text(size: _base-size)
-            set par(leading: 0.65em, justify: true)
-            body
-          })).height
-        } else { 0pt }
-        let room = H - base-h - g
-        calc.min(calc.max(room, 0.35 * H), 0.7 * H, W / ars.at(0))
-      } else { 0.5 * H }
+      let base-h = if has-text {
+        measure(block(width: W, {
+          set text(size: _base-size)
+          set par(leading: 0.65em, justify: true)
+          body
+        })).height
+      } else { 0pt }
+      let room = H - base-h - g
+      let zh = calc.min(calc.max(room, 0.35 * H), 0.7 * H, W / ar)
       let th = H - zh - g
       grid(
         columns: (W,),
         rows: (th, zh),
         row-gutter: g,
         align: (top + left, center + horizon),
-        if has-text { _shrink(self, body, W, th) } else { [] },
-        if n == 1 { _img-tile(self, images.at(0), W, zh) } else { _images-zone(self, images, W, zh, false) },
+        _shrink(self, body, W, th),
+        _img-tile(self, images.at(0), W, zh),
       )
     }
   }
+})
+
+#let _caption-h(cap, width) = {
+  measure(block(width: width, align(center)[#text(size: 0.55em, style: "italic")[#cap]])).height + 7pt
+}
+
+// Image-only gallery: tries every rows x cols split, lays each ROW out at
+// full width (images in a row share one height, widths follow aspect
+// ratios), then scales rows uniformly down until images AND their captions
+// (measured at the real, possibly narrow image widths) fit the slide.
+// The split maximizing total rendered image area wins. The final block is
+// unbreakable, so captions can never drift onto the next slide.
+#let _gallery-layout(self, images) = layout(size => {
+  let W = size.width
+  let H = size.height
+  let n = images.len()
+  let g = _gutter
+  let ars = images.map(im => _img-ar(_clean-path(im.at("path", default: ""))))
+  let caps = images.map(im => im.at("caption", default: none))
+
+  let cap-at(cap, wd) = if cap != none {
+    measure(block(width: wd, text(size: 0.55em, style: "italic")[#cap])).height + 5pt
+  } else { 0pt }
+
+  let best-score = -1.0
+  let best = (count: 1, rhs: (H,))
+  for R in range(1, n + 1) {
+    let C = calc.ceil(n / R)
+    let idx-rows = ()
+    for r in range(0, R) {
+      let cnt = calc.min(C, n - r * C)
+      if cnt > 0 {
+        let idx = ()
+        for c in range(0, cnt) { idx.push(r * C + c) }
+        idx-rows.push(idx)
+      }
+    }
+    let m = idx-rows.len()
+    let sums = idx-rows.map(idx => idx.fold(0.0, (a, i) => a + ars.at(i)))
+    let rhs = idx-rows.enumerate().map(((r, idx)) => (W - (idx.len() - 1) * g) / sums.at(r))
+
+    // Fixed-point-ish: shrink rows until images + real caption heights fit H.
+    for iter in range(0, 3) {
+      let cap-total = 0pt
+      for (r, idx) in idx-rows.enumerate() {
+        let ch = 0pt
+        for i in idx {
+          let h = cap-at(caps.at(i), rhs.at(r) * ars.at(i))
+          if h > ch { ch = h }
+        }
+        cap-total += ch
+      }
+      let imgs-total = rhs.fold(0pt, (a, h) => a + h)
+      let need = imgs-total + cap-total + (m - 1) * g
+      if need > H {
+        let s = calc.max((H - (m - 1) * g - cap-total) / imgs-total, 0.05)
+        rhs = rhs.map(h => h * s)
+      }
+    }
+
+    let area = 0.0
+    for (r, idx) in idx-rows.enumerate() {
+      let h = rhs.at(r) / 1pt
+      area += h * h * sums.at(r)
+    }
+    if area > best-score {
+      best-score = area
+      best = (count: m, rhs: rhs)
+    }
+  }
+
+  let row-grids = ()
+  let i = 0
+  for r in range(0, best.count) {
+    let cnt = calc.min(calc.ceil(n / best.count), n - i)
+    if cnt > 0 {
+      let rh = best.rhs.at(r)
+      let cells = ()
+      for c in range(0, cnt) {
+        let im = images.at(i)
+        let cap = caps.at(i)
+        let iw = rh * ars.at(i)
+        cells.push(
+          grid(
+            columns: (iw,),
+            rows: (rh, auto),
+            row-gutter: 5pt,
+            align(center)[#image(_clean-path(im.at("path", default: "")), width: iw, height: rh, fit: "contain")],
+            if cap != none { align(center)[#text(size: 0.55em, fill: self.store.accent, style: "italic")[#cap]] },
+          ),
+        )
+        i += 1
+      }
+      row-grids.push(grid(columns: (auto,) * cnt, column-gutter: g, ..cells))
+    }
+  }
+  block(breakable: false, grid(rows: (auto,) * best.count, row-gutter: g, align: center, ..row-grids))
+})
+
+#let gallery-slide(images) = touying-slide-wrapper(self => {
+  touying-slide(
+    self: self,
+    config: config-page(margin: 1.6em, header: none, footer: none),
+    align(center + horizon, _gallery-layout(self, images)),
+  )
 })
 
 #let _header(self, title, section) = {
