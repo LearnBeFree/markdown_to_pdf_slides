@@ -112,7 +112,17 @@
   let has-text = body != none
 
   if n == 0 {
-    if has-text { align(top, _shrink(self, body, W, H)) } else { [] }
+    if has-text {
+      // Vertically center whenever the text can fit (even at min size);
+      // only top-align when it genuinely overflows.
+      let mm = measure(block(width: W, {
+        set text(size: _min-size)
+        set par(leading: 0.65em, justify: true)
+        body
+      }))
+      let al = if mm.height <= H { horizon } else { top }
+      block(height: H, align(al + left, _shrink(self, body, W, H)))
+    } else { [] }
   } else if not has-text {
     align(center + horizon, _img-tile(self, images.at(0), W, H))
   } else {
@@ -124,7 +134,7 @@
         columns: (tw, zw),
         column-gutter: g,
         rows: (H,),
-        align: (top + left, center + horizon),
+        align: (horizon + left, center + horizon),
         _shrink(self, body, tw, H),
         _img-tile(self, images.at(0), zw, H),
       )
@@ -139,14 +149,14 @@
       let room = H - base-h - g
       let zh = calc.min(calc.max(room, 0.35 * H), 0.7 * H, W / ar)
       let th = H - zh - g
-      grid(
+      block(height: H, align(horizon + left, grid(
         columns: (W,),
-        rows: (th, zh),
+        rows: (auto, zh),
         row-gutter: g,
         align: (top + left, center + horizon),
         _shrink(self, body, W, th),
         _img-tile(self, images.at(0), W, zh),
-      )
+      )))
     }
   }
 })
@@ -245,7 +255,7 @@
       row-grids.push(grid(columns: (auto,) * cnt, column-gutter: g, ..cells))
     }
   }
-  block(breakable: false, grid(rows: (auto,) * best.count, row-gutter: g, align: center, ..row-grids))
+  block(height: H, breakable: false, align(center + horizon, grid(rows: (auto,) * best.count, row-gutter: g, align: center, ..row-grids)))
 })
 
 #let gallery-slide(images) = touying-slide-wrapper(self => {
@@ -257,21 +267,26 @@
 })
 
 #let _header(self, title, section) = {
-  set align(left + top)
+  // Touying renders the page header full-width anchored at the page top
+  // (zero-margin-header), so we position it ourselves with explicit pads:
+  // a touch more left/top room than the body margin (2.9em / 1.15em).
   set text(font: self.store.hfonts)
-  grid(
-    columns: (1fr, auto),
-    column-gutter: 1em,
-    align: (left + bottom, right + bottom),
-    if title != none {
-      utils.fit-to-width(grow: false, 100%, text(size: 1.6em, fill: self.store.accent, weight: "bold", title))
-    } else { [] },
-    if section != none {
-      text(size: 0.55em, fill: _soft, font: self.store.bfonts, section)
-    } else { [] },
-  )
-  v(0.45em, weak: true)
-  line(length: 100%, stroke: 1.3pt + self.store.accent.lighten(30%))
+  pad(top: 1.15em, x: 2.9em, {
+    set align(left + top)
+    grid(
+      columns: (1fr, auto),
+      column-gutter: 1em,
+      align: (left + bottom, right + bottom),
+      if title != none {
+        utils.fit-to-width(grow: false, 100%, text(size: 1.6em, fill: self.store.accent, weight: "bold", title))
+      } else { [] },
+      if section != none {
+        text(size: 0.55em, fill: _soft, font: self.store.bfonts, section)
+      } else { [] },
+    )
+    v(0.45em, weak: true)
+    line(length: 100%, stroke: 1.3pt + self.store.accent.lighten(30%))
+  })
 }
 
 #let _footer(self) = {
@@ -279,7 +294,8 @@
   set text(size: 0.5em, fill: _soft, font: self.store.bfonts)
   let deck = if self.store.footer != none { self.store.footer } else { self.info.title }
   pad(
-    .5em,
+    x: 2.9em,
+    bottom: 0.35em,
     grid(
       columns: (1fr, auto),
       align: (left, right),
@@ -342,20 +358,12 @@
       ),
       {
         box(width: 100%, height: 100%)[#image(cover, width: 100%, height: 100%, fit: "cover")]
-        place(top + center, box(width: 100%, height: 100%)[#rect(
-          width: 100%,
-          height: 100%,
-          fill: gradient.linear(
-            (rgb(0, 0, 0, 0), 0%),
-            (rgb(0, 0, 0, 0), 35%),
-            (rgb(0, 0, 0, 185), 100%),
-            angle: 90deg,
-          ),
-          stroke: none,
-        )])
-        place(bottom + left, dx: 2em, dy: -2.2em, {
+        // Uniform 20% darkening across the whole cover image.
+        place(top + left, rect(width: 100%, height: 100%, fill: rgb(0, 0, 0, 20%), stroke: none))
+        place(center + horizon, {
+          set align(center)
           set text(fill: _cream)
-          if info.title != none { text(size: 1.6em, font: self.store.hfonts, weight: "bold", info.title) }
+          if info.title != none { text(size: 1.8em, font: self.store.hfonts, weight: "bold", info.title) }
           if info.subtitle != none { v(0.4em); text(size: 0.9em, info.subtitle) }
           if meta-line != "" { v(0.9em); text(size: 0.65em, fill: _cream.lighten(70%), meta-line) }
         })
@@ -429,7 +437,7 @@
     config-page(
       ..utils.page-args-from-aspect-ratio(aspect-ratio),
       fill: _paper,
-      margin: (top: 4.4em, bottom: 1.6em, x: 2em),
+      margin: (top: 5.2em, bottom: 1.6em, x: 2.5em),
     ),
     config-colors(primary: accent),
     config-store(accent: accent, hfonts: hfonts, bfonts: bfonts, footer: footer-t),
