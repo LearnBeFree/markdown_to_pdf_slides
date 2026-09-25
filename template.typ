@@ -3,7 +3,8 @@
 //
 // ALL frontmatter variables are OPTIONAL:
 //   title, subtitle, author, date, institution,
-//   accent-color ("#8B0000" or "8B0000"), title-font, body-font, cover-image.
+//   accent-color ("#8B0000" or "8B0000"), title-font, body-font, cover-image,
+//   toc (false hides the outline slide that otherwise follows the title).
 // Missing values fall back to safe defaults inside slides-theme.typ;
 // a missing/nonexistent cover-image yields a clean light title slide.
 

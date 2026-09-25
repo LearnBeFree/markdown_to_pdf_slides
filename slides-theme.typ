@@ -26,15 +26,19 @@
 #let _base-size = 20pt
 #let _min-size = 14pt
 #let _gutter = 12pt
+// Optical vertical balance: the header rule sits ~47pt above the content
+// box while the footer text starts ~17pt below it; lifting the content by
+// half the difference centers it optically between rule and footer.
+#let _v-balance = 15pt
 #let _shrink-steps = range(20, 13, step: -1).map(i => i * 1pt)
 
 #let _display-fonts = ("Oswald", "Liberation Sans", "Carlito", "FreeSans")
 #let _body-fonts = ("Philosopher", "Liberation Serif", "Caladea", "FreeSerif")
 
 #let _cstr(v) = {
-  if type(v) == str { v }
-  else if type(v) == content { repr(v).trim().values.at(0, default: "") }
-  else { "" }
+  if type(v) == str { v } else if type(v) == content {
+    repr(v).trim().values.at(0, default: "")
+  } else { "" }
 }
 
 #let _is-empty(v) = { _cstr(v).trim() == "" }
@@ -43,7 +47,13 @@
 
 #let _resolve-color(v, fallback) = {
   if not _has(v) { return fallback }
-  let s = _cstr(v).trim().replace("\\", "").replace("#", "").replace("\"", "").replace(" ", "").replace("'", "")
+  let s = _cstr(v)
+    .trim()
+    .replace("\\", "")
+    .replace("#", "")
+    .replace("\"", "")
+    .replace(" ", "")
+    .replace("'", "")
   if s.matches(regex("^[0-9a-fA-F]{6}$")).len() > 0 { return rgb("#" + s) }
   if s.matches(regex("^[0-9a-fA-F]{3}$")).len() > 0 {
     let e = s.at(0) + s.at(0) + s.at(1) + s.at(1) + s.at(2) + s.at(2)
@@ -53,7 +63,9 @@
 }
 
 #let _resolve-fonts(v, fallback) = {
-  if type(v) == array { return v.map(f => _cstr(f)).filter(f => f != "") + fallback }
+  if type(v) == array {
+    return v.map(f => _cstr(f)).filter(f => f != "") + fallback
+  }
   if _has(v) {
     let names = _cstr(v).split(",").map(n => n.trim()).filter(n => n != "")
     if names.len() > 0 { return names + fallback }
@@ -61,7 +73,9 @@
   fallback
 }
 
-#let _clean-path(v) = { _cstr(v).trim().replace("\\#", "#").replace("\\_", "_").replace("\\%", "%") }
+#let _clean-path(v) = {
+  _cstr(v).trim().replace("\\#", "#").replace("\\_", "_").replace("\\%", "%")
+}
 
 #let _img-ar(path) = {
   let m = measure(image(path, width: 100pt))
@@ -96,7 +110,11 @@
         rows: (1fr, auto),
         row-gutter: 0.4em,
         align(center + horizon)[#box(width: 100%, height: 100%)[#pic]],
-        align(center)[#text(size: 0.55em, fill: self.store.accent, style: "italic")[#cap]],
+        align(center)[#text(
+          size: 0.55em,
+          fill: self.store.accent,
+          style: "italic",
+        )[#cap]],
       )
     } else {
       box(width: 100%, height: 100%)[#pic]
@@ -135,8 +153,7 @@
         column-gutter: g,
         rows: (H,),
         align: (horizon + left, center + horizon),
-        _shrink(self, body, tw, H),
-        _img-tile(self, images.at(0), zw, H),
+        _shrink(self, body, tw, H), _img-tile(self, images.at(0), zw, H),
       )
     } else {
       let base-h = if has-text {
@@ -162,7 +179,13 @@
 })
 
 #let _caption-h(cap, width) = {
-  measure(block(width: width, align(center)[#text(size: 0.55em, style: "italic")[#cap]])).height + 7pt
+  (
+    measure(block(width: width, align(center)[#text(
+      size: 0.55em,
+      style: "italic",
+    )[#cap]])).height
+      + 7pt
+  )
 }
 
 // Image-only gallery: tries every rows x cols split, lays each ROW out at
@@ -180,7 +203,13 @@
   let caps = images.map(im => im.at("caption", default: none))
 
   let cap-at(cap, wd) = if cap != none {
-    measure(block(width: wd, text(size: 0.55em, style: "italic")[#cap])).height + 5pt
+    (
+      measure(block(width: wd, text(
+        size: 0.55em,
+        style: "italic",
+      )[#cap])).height
+        + 5pt
+    )
   } else { 0pt }
 
   let best-score = -1.0
@@ -198,7 +227,9 @@
     }
     let m = idx-rows.len()
     let sums = idx-rows.map(idx => idx.fold(0.0, (a, i) => a + ars.at(i)))
-    let rhs = idx-rows.enumerate().map(((r, idx)) => (W - (idx.len() - 1) * g) / sums.at(r))
+    let rhs = idx-rows
+      .enumerate()
+      .map(((r, idx)) => (W - (idx.len() - 1) * g) / sums.at(r))
 
     // Fixed-point-ish: shrink rows until images + real caption heights fit H.
     for iter in range(0, 3) {
@@ -246,8 +277,19 @@
             columns: (iw,),
             rows: (rh, auto),
             row-gutter: 5pt,
-            align(center)[#image(_clean-path(im.at("path", default: "")), width: iw, height: rh, fit: "contain")],
-            if cap != none { align(center)[#text(size: 0.55em, fill: self.store.accent, style: "italic")[#cap]] },
+            align(center)[#image(
+              _clean-path(im.at("path", default: "")),
+              width: iw,
+              height: rh,
+              fit: "contain",
+            )],
+            if cap != none {
+              align(center)[#text(
+                size: 0.55em,
+                fill: self.store.accent,
+                style: "italic",
+              )[#cap]]
+            },
           ),
         )
         i += 1
@@ -255,7 +297,8 @@
       row-grids.push(grid(columns: (auto,) * cnt, column-gutter: g, ..cells))
     }
   }
-  block(height: H, breakable: false, align(center + horizon, grid(rows: (auto,) * best.count, row-gutter: g, align: center, ..row-grids)))
+  block(height: H, breakable: false, align(center + horizon, grid(rows: (auto,)
+      * best.count, row-gutter: g, align: center, ..row-grids)))
 })
 
 #let gallery-slide(images) = touying-slide-wrapper(self => {
@@ -268,20 +311,30 @@
 
 #let _header(self, title, section) = {
   // Touying renders the page header full-width anchored at the page top
-  // (zero-margin-header), so we position it ourselves with explicit pads:
-  // a touch more left/top room than the body margin (2.9em / 1.15em).
+  // (zero-margin-header), so the rule can span the whole slide edge-to-edge
+  // while title/section get only a small two-letter inset (~1.5em).
   set text(font: self.store.hfonts)
-  pad(top: 1.15em, x: 2.9em, {
+  pad(top: 1.15em, {
     set align(left + top)
     grid(
       columns: (1fr, auto),
       column-gutter: 1em,
       align: (left + bottom, right + bottom),
       if title != none {
-        utils.fit-to-width(grow: false, 100%, text(size: 1.6em, fill: self.store.accent, weight: "bold", title))
+        pad(left: 1.5em, utils.fit-to-width(grow: false, 100%, text(
+          size: 1.6em,
+          fill: self.store.accent,
+          weight: "bold",
+          title,
+        )))
       } else { [] },
       if section != none {
-        text(size: 0.55em, fill: _soft, font: self.store.bfonts, section)
+        pad(right: 1.5em, text(
+          size: 0.55em,
+          fill: _soft,
+          font: self.store.bfonts,
+          section,
+        ))
       } else { [] },
     )
     v(0.45em, weak: true)
@@ -290,40 +343,98 @@
 }
 
 #let _footer(self) = {
-  set align(bottom)
   set text(size: 0.5em, fill: _soft, font: self.store.bfonts)
-  let deck = if self.store.footer != none { self.store.footer } else { self.info.title }
-  pad(
+  let deck = if self.store.footer != none { self.store.footer } else {
+    self.info.title
+  }
+  // Whole footer lifts off the page edge by ~half a letter height.
+  place(bottom, pad(
     x: 2.9em,
-    bottom: 0.35em,
-    grid(
-      columns: (1fr, auto),
-      align: (left, right),
-      if deck != none { deck } else { [] },
-      context utils.slide-counter.display() + " / " + utils.last-slide-number,
-    ),
-  )
-  place(bottom, components.progress-bar(height: 2.5pt, self.store.accent, self.store.accent.lighten(84%)))
+    bottom: 25pt,
+    {
+      grid(
+        columns: (1fr, auto),
+        align: (left, right),
+        if deck != none { deck } else { [] },
+        context utils.slide-counter.display() + " / " + utils.last-slide-number,
+      )
+      components.progress-bar(
+        height: 2.5pt,
+        self.store.accent,
+        self.store.accent.lighten(84%),
+      )
+    },
+  ))
 }
 
-#let content-slide(title: none, section: none, body: none, images: ()) = touying-slide-wrapper(self => {
+#let content-slide(
+  title: none,
+  section: none,
+  body: none,
+  images: (),
+) = touying-slide-wrapper(self => {
   touying-slide(
     self: self,
-    config: config-page(header: _header(self, title, section), footer: _footer(self)),
-    _tile-layout(self, title, body, images),
+    config: config-page(
+      header: _header(self, title, section),
+      footer: _footer(self),
+    ),
+    pad(top: -_v-balance, _tile-layout(self, title, body, images)),
   )
 })
 
 #let section-slide(body) = touying-slide-wrapper(self => {
   touying-slide(
     self: self,
-    config: config-page(header: none, footer: _footer(self)),
+    // No header here, so use symmetric top/bottom margins: the content box
+    // then shares its center with the page and the title sits dead-center.
+    config: config-page(
+      margin: (top: 1.6em, bottom: 1.6em, x: 2.5em),
+      header: none,
+      footer: _footer(self),
+    ),
     align(horizon, {
       set text(font: self.store.hfonts, fill: self.store.accent)
       set align(center)
       text(size: 1.7em, weight: "bold", body)
-      v(1em)
-      block(width: 100%, align(center)[#line(length: 22%, stroke: 3pt + self.store.accent)])
+    }),
+  )
+})
+
+// Outline after the deck title. entries: ((level: 1, text: [..]), ...) —
+// level 1 = H1 sections (numbered, accent), level 2 = H2 slide titles.
+// No heading, no footer; generous vertical margins keep it from stretching
+// edge to edge — the list just floats neatly centered.
+#let toc-slide(entries) = touying-slide-wrapper(self => {
+  touying-slide(
+    self: self,
+    config: config-page(
+      margin: (top: 3.4em, bottom: 3.4em, x: 2.5em),
+      header: none,
+      footer: none,
+    ),
+    layout(size => {
+      let W = size.width
+      let H = size.height
+      let n = 0
+      let content = {
+        set text(font: self.store.bfonts)
+        for e in entries {
+          if e.level == 1 {
+            n += 1
+            text(
+              size: 0.85em,
+              weight: "bold",
+              fill: self.store.accent,
+            )[#n. #e.text]
+            v(0.5em)
+          } else {
+            pad(left: 1.8em, text(size: 0.75em)[#e.text])
+            v(0.32em)
+          }
+        }
+      }
+      block(height: H, align(horizon + left, _shrink(self, content, W, H)))
     }),
   )
 })
@@ -332,10 +443,20 @@
   touying-slide(
     self: self,
     config: utils.merge-dicts(
-      config-page(fill: self.store.accent, margin: 2em, header: none, footer: none),
+      config-page(
+        fill: self.store.accent,
+        margin: 2em,
+        header: none,
+        footer: none,
+      ),
       config-common(freeze-slide-counter: true),
     ),
-    align(horizon + center, text(size: 1.5em, fill: _cream, font: self.store.hfonts, body)),
+    align(horizon + center, text(
+      size: 1.5em,
+      fill: _cream,
+      font: self.store.hfonts,
+      body,
+    )),
   )
 })
 
@@ -356,18 +477,43 @@
         config-page(margin: 0em, header: none, footer: none),
         config-common(freeze-slide-counter: true),
       ),
-      {
-        box(width: 100%, height: 100%)[#image(cover, width: 100%, height: 100%, fit: "cover")]
-        // Uniform 20% darkening across the whole cover image.
-        place(top + left, rect(width: 100%, height: 100%, fill: rgb(0, 0, 0, 20%), stroke: none))
+      box(width: 100%, height: 100%, {
+        box(width: 100%, height: 100%)[#image(
+          cover,
+          width: 100%,
+          height: 100%,
+          fit: "cover",
+        )]
+        // Uniform 70% darkening across the whole cover image (verified:
+        // page luminance 134.5 -> 107.2 = x0.797 with the scrim).
+        place(top + left, rect(
+          width: 100%,
+          height: 100%,
+          fill: rgb(0, 0, 0, 70%),
+          stroke: none,
+        ))
+
         place(center + horizon, {
           set align(center)
           set text(fill: _cream)
-          if info.title != none { text(size: 1.8em, font: self.store.hfonts, weight: "bold", info.title) }
-          if info.subtitle != none { v(0.4em); text(size: 0.9em, info.subtitle) }
-          if meta-line != "" { v(0.9em); text(size: 0.65em, fill: _cream.lighten(70%), meta-line) }
+          if info.title != none {
+            text(
+              size: 1.8em,
+              font: self.store.hfonts,
+              weight: "bold",
+              info.title,
+            )
+          }
+          if info.subtitle != none {
+            v(0.4em)
+            text(size: 0.9em, info.subtitle)
+          }
+          if meta-line != "" {
+            v(0.9em)
+            text(size: 0.65em, fill: _cream.lighten(70%), meta-line)
+          }
         })
-      },
+      }),
     )
   } else {
     touying-slide(
@@ -379,12 +525,24 @@
       align(horizon + center, {
         set align(center)
         if info.title != none {
-          text(size: 1.8em, font: self.store.hfonts, weight: "bold", fill: _ink, info.title)
+          text(
+            size: 1.8em,
+            font: self.store.hfonts,
+            weight: "bold",
+            fill: _ink,
+            info.title,
+          )
         }
         v(1em)
         line(length: 15%, stroke: 3pt + self.store.accent)
-        if info.subtitle != none { v(0.8em); text(size: 0.95em, fill: _soft, info.subtitle) }
-        if meta-line != "" { v(1.4em); text(size: 0.65em, fill: _soft, meta-line) }
+        if info.subtitle != none {
+          v(0.8em)
+          text(size: 0.95em, fill: _soft, info.subtitle)
+        }
+        if meta-line != "" {
+          v(1.4em)
+          text(size: 0.65em, fill: _soft, meta-line)
+        }
       }),
     )
   }
@@ -406,13 +564,27 @@
 
   set text(size: _base-size, font: bfonts, lang: "ru", fill: _ink)
   set par(justify: true, leading: 0.65em)
-  set list(marker: text(fill: accent)[▪], indent: 0.6em, body-indent: 1em, spacing: 0.6em)
+  set list(
+    marker: text(fill: accent)[▪],
+    indent: 0.6em,
+    body-indent: 1em,
+    spacing: 0.6em,
+  )
   set enum(spacing: 0.6em)
   set strong(delta: 300)
   show strong: it => text(fill: accent, it.body)
   show link: it => text(fill: accent.darken(10%), it)
-  show raw.where(block: true): block.with(fill: _ink.lighten(94%), inset: 0.8em, radius: 4pt, width: 100%)
-  show raw.where(block: false): box.with(fill: _ink.lighten(94%), inset: (x: 0.2em, y: 0.1em), radius: 3pt)
+  show raw.where(block: true): block.with(
+    fill: _ink.lighten(94%),
+    inset: 0.8em,
+    radius: 4pt,
+    width: 100%,
+  )
+  show raw.where(block: false): box.with(
+    fill: _ink.lighten(94%),
+    inset: (x: 0.2em, y: 0.1em),
+    radius: 3pt,
+  )
 
   show quote: it => block(
     width: 100%,
@@ -430,7 +602,11 @@
     ]
   ]
 
-  show table.cell.where(y: 0): set text(weight: "bold", fill: accent, size: 0.85em)
+  show table.cell.where(y: 0): set text(
+    weight: "bold",
+    fill: accent,
+    size: 0.85em,
+  )
   set table(stroke: 0.7pt + _ink.lighten(72%))
 
   show: touying-slides.with(
@@ -440,7 +616,12 @@
       margin: (top: 5.2em, bottom: 1.6em, x: 2.5em),
     ),
     config-colors(primary: accent),
-    config-store(accent: accent, hfonts: hfonts, bfonts: bfonts, footer: footer-t),
+    config-store(
+      accent: accent,
+      hfonts: hfonts,
+      bfonts: bfonts,
+      footer: footer-t,
+    ),
     ..args,
   )
 

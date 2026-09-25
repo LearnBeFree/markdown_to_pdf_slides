@@ -3,7 +3,8 @@
 //
 // ALL frontmatter variables are OPTIONAL:
 //   title, subtitle, author, date, institution,
-//   accent-color ("#8B0000" or "8B0000"), title-font, body-font, cover-image.
+//   accent-color ("#8B0000" or "8B0000"), title-font, body-font, cover-image,
+//   toc (false hides the outline slide that otherwise follows the title).
 // Missing values fall back to safe defaults inside slides-theme.typ;
 // a missing/nonexistent cover-image yields a clean light title slide.
 
@@ -36,6 +37,9 @@
 
 // Custom title slide (always rendered; cover image is optional).
 #title-slide(cover-image: if _cover-raw != "" { _cover-raw } else { none })
+
+#let _toc-entries = ((level: 1, text: [Устойчивость]), (level: 2, text: [Всё по умолчанию]), (level: 1, text: [Основы]), (level: 2, text: [Монастырь как центр мира]), (level: 2, text: [Термин и определение]), (level: 2, text: [Задание]), )
+#toc-slide(_toc-entries)
 
 #section-slide[Устойчивость]
 

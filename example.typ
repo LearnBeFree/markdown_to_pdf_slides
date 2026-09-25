@@ -3,7 +3,8 @@
 //
 // ALL frontmatter variables are OPTIONAL:
 //   title, subtitle, author, date, institution,
-//   accent-color ("#8B0000" or "8B0000"), title-font, body-font, cover-image.
+//   accent-color ("#8B0000" or "8B0000"), title-font, body-font, cover-image,
+//   toc (false hides the outline slide that otherwise follows the title).
 // Missing values fall back to safe defaults inside slides-theme.typ;
 // a missing/nonexistent cover-image yields a clean light title slide.
 
@@ -27,15 +28,18 @@
   config-info(
     title: [Готическая архитектура],
     subtitle: [От аббата Сугерия до «пламенеющей готики»],
-    author: [Мария Ковалёва],
+    author: [Степан Ахвен],
     date: [2026],
-    institution: [Кафедра истории искусства],
+    
     
   ),
 )
 
 // Custom title slide (always rendered; cover image is optional).
 #title-slide(cover-image: if _cover-raw != "" { _cover-raw } else { none })
+
+#let _toc-entries = ((level: 1, text: [Введение]), (level: 2, text: [Что такое готика]), (level: 2, text: [Термин и определение]), (level: 1, text: [Конструкции]), (level: 2, text: [Нервюрный свод]), (level: 2, text: [Розетка]), (level: 2, text: [Хронология]), (level: 2, text: [Вертикальная диаграмма]), (level: 1, text: [Практика]), (level: 2, text: [Задание]), (level: 2, text: [Итог]), )
+#toc-slide(_toc-entries)
 
 #section-slide[Введение]
 

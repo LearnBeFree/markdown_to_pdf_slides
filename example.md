@@ -1,9 +1,8 @@
 ---
 title: Готическая архитектура
 subtitle: От аббата Сугерия до «пламенеющей готики»
-author: Мария Ковалёва
+author: Степан Ахвен
 date: 2026
-institution: Кафедра истории искусства
 accent-color: "#2c3e50"
 title-font: "Oswald"
 cover-image: "assets/cover.jpg"

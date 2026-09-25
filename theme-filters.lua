@@ -129,6 +129,16 @@ function Pandoc(doc)
   local section, title = nil, nil
   local body_blocks, images = {}, {}
   local emitted_for_title = false
+  local toc_entries = {}
+
+  -- Frontmatter flag: `toc: false` hides the outline slide that otherwise
+  -- follows the deck title. Anything else (or absent) keeps it visible.
+  local show_toc = true
+  local tocv = meta["toc"]
+  if tocv ~= nil then
+    local v = pandoc.utils.stringify(tocv)
+    if v == "false" or v == "no" or v == "off" then show_toc = false end
+  end
 
   local function emit_content(include_images)
     local chunks = { "#content-slide(" }
@@ -188,10 +198,12 @@ function Pandoc(doc)
         flush(true)
         local name = ser_inlines(b.content)
         out[#out + 1] = "#section-slide[" .. name .. "]"
+        toc_entries[#toc_entries + 1] = { level = 1, text = name }
         section, title = name, nil
       elseif b.level == 2 then
         flush(true)
         title = ser_inlines(b.content)
+        toc_entries[#toc_entries + 1] = { level = 2, text = title }
         emitted_for_title = false
       else
         body_blocks[#body_blocks + 1] = pandoc.Para(pandoc.Strong(b.content))
@@ -222,6 +234,15 @@ function Pandoc(doc)
     end
   end
   flush(true)
+
+  if show_toc and #toc_entries > 0 then
+    local es = {}
+    for _, e in ipairs(toc_entries) do
+      es[#es + 1] = "(level: " .. e.level .. ", text: [" .. e.text .. "]), "
+    end
+    local pre = "#let _toc-entries = (" .. table.concat(es) .. ")\n#toc-slide(_toc-entries)"
+    table.insert(out, 1, pre)
+  end
 
   return pandoc.Pandoc({ pandoc.RawBlock("typst", table.concat(out, "\n\n")) }, meta)
 end
