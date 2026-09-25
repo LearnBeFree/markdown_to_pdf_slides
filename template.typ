@@ -1,19 +1,14 @@
-// template.typ — Pandoc wrapper for the art-theme (Touying).
+// template.typ — Pandoc wrapper for slides-theme (Touying).
 // Pipeline: Obsidian (Markdown) -> Pandoc -> Typst -> PDF.
 //
 // ALL frontmatter variables are OPTIONAL:
 //   title, subtitle, author, date, institution,
 //   accent-color ("#8B0000" or "8B0000"), title-font, body-font, cover-image.
-// Missing values fall back to safe defaults inside art-theme.typ;
+// Missing values fall back to safe defaults inside slides-theme.typ;
 // a missing/nonexistent cover-image yields a clean light title slide.
-//
-// NOTE: accent-color/title-font/body-font/cover-image are emitted as Typst
-// STRING literals. Pandoc escapes special chars (# _ * ...) with a backslash;
-// the theme strips those backslashes before use, so "#2c3e50" and
-// "assets/my_cover.jpg" both survive intact.
 
 #import "@preview/touying:0.7.4": *
-#import "art-theme.typ": *
+#import "slides-theme.typ": *
 
 #let _accent-raw = "$if(accent-color)$$accent-color$$endif$"
 #let _title-font-raw = "$if(title-font)$$title-font$$endif$"
@@ -21,7 +16,7 @@
 #let _cover-raw = "$if(cover-image)$$cover-image$$endif$"
 #let _aspect-raw = "$if(aspect-ratio)$$aspect-ratio$$else$16-9$endif$"
 
-#show: art-theme.with(
+#show: slides-theme.with(
   aspect-ratio: _aspect-raw,
   accent: _accent-raw,
   title-font: _title-font-raw,

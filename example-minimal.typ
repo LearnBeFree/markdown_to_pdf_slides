@@ -1,19 +1,14 @@
-// template.typ — Pandoc wrapper for the art-theme (Touying).
+// template.typ — Pandoc wrapper for slides-theme (Touying).
 // Pipeline: Obsidian (Markdown) -> Pandoc -> Typst -> PDF.
 //
 // ALL frontmatter variables are OPTIONAL:
 //   title, subtitle, author, date, institution,
 //   accent-color ("#8B0000" or "8B0000"), title-font, body-font, cover-image.
-// Missing values fall back to safe defaults inside art-theme.typ;
+// Missing values fall back to safe defaults inside slides-theme.typ;
 // a missing/nonexistent cover-image yields a clean light title slide.
-//
-// NOTE: accent-color/title-font/body-font/cover-image are emitted as Typst
-// STRING literals. Pandoc escapes special chars (# _ * ...) with a backslash;
-// the theme strips those backslashes before use, so "#2c3e50" and
-// "assets/my_cover.jpg" both survive intact.
 
 #import "@preview/touying:0.7.4": *
-#import "art-theme.typ": *
+#import "slides-theme.typ": *
 
 #let _accent-raw = "не-цвет"
 #let _title-font-raw = ""
@@ -21,7 +16,7 @@
 #let _cover-raw = ""
 #let _aspect-raw = "16-9"
 
-#show: art-theme.with(
+#show: slides-theme.with(
   aspect-ratio: _aspect-raw,
   accent: _accent-raw,
   title-font: _title-font-raw,
@@ -42,57 +37,68 @@
 // Custom title slide (always rendered; cover image is optional).
 #title-slide(cover-image: if _cover-raw != "" { _cover-raw } else { none })
 
-= Устойчивость
-<устойчивость>
-== Всё по умолчанию
-<всё-по-умолчанию>
-Этот слайд собран из «ленивого» frontmatter: отсутствуют `subtitle`,
-`author`, `date` и `title-font`.
+#section-slide[Устойчивость]
 
-- `cover-image` ведёт на несуществующий файл — тема строит титул без
-  картинки
-- `accent-color` содержит мусор — берётся дефолтный бордовый
-  #strong[\#8B0000]
-- Заголовки — #strong[Yeseva One];, основной текст —
-  #strong[Philosopher]
+#content-slide(
+  title: [Всё по умолчанию],
+  section: [Устойчивость],
+  body: [
+Этот файл проверяет деградацию: неверный цвет акцента и несуществующая
+обложка должны незаметно подмениться безопасными значениями.
 
-Компиляция проходит без единой ошибки.
 
-= Основы
-<основы>
-== Монастырь как центр мира
-<монастырь-как-центр-мира>
-#strong[Романский стиль] \(X–XII века) — первая общеевропейская
-архитектурная эпоха после Рима.
+Заголовков первого и второго уровней ровно столько, сколько нужно, а
+горизонтальных линий нет вовсе.
 
-#emph[Militans Ecclesia];: монастырь — крепость духа.
-
-#figure([#image("assets/chart.jpg", alt: "Типичная романская капитель (заглушка)")],
-  caption: [
-    Типичная романская капитель \(заглушка)
-  ]
+  ],
 )
 
-== Термин и определение
-<термин-и-определение>
-#two-columns(columns: (55fr, 45fr))[#quote(block: true)[
-Романская арка — полукруглая и тяжёлая: она опирается на массивную
-стену.
-]
+#content-slide(
+  title: [Всё по умолчанию],
+  section: [Устойчивость],
+  body: [
+А это второй слайд с тем же заголовком — проверка разделителя без
+картинок и без таблиц.
 
-#strong[Клеристорий] — верхний ярус стен с окнами.
-][#figure([#image("assets/chart.jpg", alt: "Интерьер романской церкви")],
-  caption: [
-    Интерьер романской церкви
-  ]
+  ],
 )
-]
-== Задание
-<задание>
-#assignment[Перечислите три отличия романского храма от готического.
-][#figure([#image("assets/chart.jpg", alt: "Схема романской церкви (Excalidraw)")],
-  caption: [
-    Схема романской церкви \(Excalidraw)
-  ]
+
+#section-slide[Основы]
+
+#content-slide(
+  title: [Монастырь как центр мира],
+  section: [Основы],
+  body: [
+Толстые стены, маленькие окна, цилиндрические своды — романский храм
+построен как крепость веры.
+
+  ],
 )
-]
+
+#content-slide(
+  title: [Термин и определение],
+  section: [Основы],
+  body: [
+Романский стиль — первое общеевропейское художественное направление,
+сложившееся после распада каролингской империи.
+
+
+#strong[Примечание]
+
+
+Жирный текст вместо заголовка третьего уровня.
+
+  ],
+)
+
+#content-slide(
+  title: [Задание],
+  section: [Основы],
+  body: [
+Найдите на фотографии церковь Сен-Мартен — изображение потеряно, поэтому
+здесь появится аккуратная заглушка.
+
+
+#box(width: 100%, height: 110pt, stroke: (paint: rgb("#9A9186"), thickness: 0.8pt, dash: "dashed"), radius: 4pt)[#align(center + horizon)[#text(fill: rgb("#9A9186"), size: 0.8em)[нет изображения: assets/missing.jpg]]]
+  ],
+)

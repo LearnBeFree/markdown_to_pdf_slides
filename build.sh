@@ -19,7 +19,7 @@ if [ ! -f "$SRC_ABS" ]; then
 fi
 
 # Work inside the theme directory so the generated .typ can import
-# art-theme.typ, and so --font-path / assets resolve consistently.
+# slides-theme.typ, and so --font-path / assets resolve consistently.
 cd "$SCRIPT_DIR"
 
 BASE="$(basename "$SRC_ABS")"

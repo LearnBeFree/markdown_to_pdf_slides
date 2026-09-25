@@ -16,7 +16,7 @@ if (-not (Test-Path $SrcAbs)) {
 }
 
 # Work inside the theme directory so the generated .typ can import
-# art-theme.typ, and so --font-path / assets resolve consistently.
+# slides-theme.typ, and so --font-path / assets resolve consistently.
 Set-Location $ScriptDir
 
 $Base = [System.IO.Path]::GetFileNameWithoutExtension($SrcAbs)
