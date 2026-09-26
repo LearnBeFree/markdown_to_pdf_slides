@@ -2,6 +2,8 @@
 # Build slides:  ./build.sh [source.md]
 # Requires: pandoc, typst. No hardcoded absolute paths (everything is derived
 # from this script's location, so the theme is portable).
+#
+# Outputs <name>.typ and <name>.pdf next to the SOURCE markdown file.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -18,33 +20,47 @@ if [ ! -f "$SRC_ABS" ]; then
   exit 1
 fi
 
-# Work inside the theme directory so the generated .typ can import
-# slides-theme.typ, and so --font-path / assets resolve consistently.
+# Work inside the theme directory so --font-path and cwd-relative asset
+# references resolve consistently; outputs still go next to the source.
 cd "$SCRIPT_DIR"
 
+SRC_DIR="$(dirname "$SRC_ABS")"
 BASE="$(basename "$SRC_ABS")"
 BASE="${BASE%.*}"
-TYP="${BASE}.typ"
-PDF="${BASE}.pdf"
+PDF="$SRC_DIR/$BASE.pdf"
+
+# The generated .typ is an intermediate: it goes to the OS temp dir and is
+# removed after the build (PDF stays next to the source). Set
+# SLIDES_KEEP_TYP=1 to keep the .typ beside the .md for debugging.
+if [ "${SLIDES_KEEP_TYP:-0}" = "1" ]; then
+  TYP="$SRC_DIR/$BASE.typ"
+  WORK_DIR=""
+else
+  WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/slides-build.XXXXXX")"
+  trap 'rm -rf "$WORK_DIR"' EXIT
+  TYP="$WORK_DIR/$BASE.typ"
+fi
 
 FONT_ARGS=()
 if [ -d "$SCRIPT_DIR/fonts" ]; then
   FONT_ARGS=(--font-path "$SCRIPT_DIR/fonts")
 fi
 
-pandoc "$SRC_ABS" \
-  --from markdown \
+# Extension tweaks:
+#   -raw_tex                      keep `\word` sequences as literal text
+#                                 instead of silently dropping raw TeX
+#   +wikilinks_title_after_pipe   Obsidian `![[pic.png]]` embeds become real
+#                                 images the filter can lay out
+THEME_DIR="$SCRIPT_DIR" pandoc "$SRC_ABS" \
+  --from markdown-raw_tex+wikilinks_title_after_pipe \
   --to typst \
   --standalone \
   --template "$SCRIPT_DIR/template.typ" \
   --lua-filter "$SCRIPT_DIR/theme-filters.lua" \
   --output "$TYP"
 
-# Pandoc hardcodes a cramped `inset: <n>pt` on every table. Typst cannot
-# override an explicit argument with a set-rule (and rebuilding the table in a
-# show-rule recurses), so widen the cell padding in the generated file.
-sed -i -E 's/inset: [0-9.]+pt/inset: (x: 0.95em, y: 0.72em)/g' "$TYP"
+# The filter emits absolute image paths and the .typ can live anywhere, so
+# compile against the filesystem root (theme-dir lets the import resolve).
+typst compile --root / "${FONT_ARGS[@]}" "$TYP" "$PDF"
 
-typst compile "${FONT_ARGS[@]}" "$TYP" "$PDF"
-
-echo "Built: $SCRIPT_DIR/$PDF"
+echo "Built: $PDF"

@@ -30,15 +30,15 @@
 // box while the footer text starts ~17pt below it; lifting the content by
 // half the difference centers it optically between rule and footer.
 #let _v-balance = 15pt
-#let _shrink-steps = range(20, 13, step: -1).map(i => i * 1pt)
+#let _shrink-steps = range(int(_base-size / 1pt), int(_min-size / 1pt) - 1, step: -1).map(i => i * 1pt)
 
 #let _display-fonts = ("Oswald", "Liberation Sans", "Carlito", "FreeSans")
 #let _body-fonts = ("Philosopher", "Liberation Serif", "Caladea", "FreeSerif")
 
 #let _cstr(v) = {
-  if type(v) == str { v } else if type(v) == content {
-    repr(v).trim().values.at(0, default: "")
-  } else { "" }
+  // Only plain strings are expected here (template raw values); anything
+  // else degrades to "" so defaults kick in instead of a hard crash.
+  if type(v) == str { v } else { "" }
 }
 
 #let _is-empty(v) = { _cstr(v).trim() == "" }
@@ -79,7 +79,8 @@
 
 #let _img-ar(path) = {
   let m = measure(image(path, width: 100pt))
-  m.width / m.height
+  // 1.0/0.0 raises "cannot divide by zero" in Typst — guard degenerate files.
+  m.width / calc.max(m.height, 1pt)
 }
 
 #let _shrink(self, body, width, height) = {
@@ -122,7 +123,7 @@
   })
 }
 
-#let _tile-layout(self, title, body, images) = layout(size => {
+#let _tile-layout(self, body, images) = layout(size => {
   let W = size.width
   let H = size.height
   let g = _gutter
@@ -139,7 +140,7 @@
         body
       }))
       let al = if mm.height <= H { horizon } else { top }
-      block(height: H, align(al + left, _shrink(self, body, W, H)))
+      block(height: H, breakable: false, align(al + left, _shrink(self, body, W, H)))
     } else { [] }
   } else if not has-text {
     align(center + horizon, _img-tile(self, images.at(0), W, H))
@@ -166,7 +167,7 @@
       let room = H - base-h - g
       let zh = calc.min(calc.max(room, 0.35 * H), 0.7 * H, W / ar)
       let th = H - zh - g
-      block(height: H, align(horizon + left, grid(
+      block(height: H, breakable: false, align(horizon + left, grid(
         columns: (W,),
         rows: (auto, zh),
         row-gutter: g,
@@ -177,16 +178,6 @@
     }
   }
 })
-
-#let _caption-h(cap, width) = {
-  (
-    measure(block(width: width, align(center)[#text(
-      size: 0.55em,
-      style: "italic",
-    )[#cap]])).height
-      + 7pt
-  )
-}
 
 // Image-only gallery: tries every rows x cols split, lays each ROW out at
 // full width (images in a row share one height, widths follow aspect
@@ -232,7 +223,8 @@
       .map(((r, idx)) => (W - (idx.len() - 1) * g) / sums.at(r))
 
     // Fixed-point-ish: shrink rows until images + real caption heights fit H.
-    for iter in range(0, 3) {
+    // Narrow images re-wrap captions taller, so give it several passes.
+    for iter in range(0, 8) {
       let cap-total = 0pt
       for (r, idx) in idx-rows.enumerate() {
         let ch = 0pt
@@ -257,45 +249,41 @@
     }
     if area > best-score {
       best-score = area
-      best = (count: m, rhs: rhs)
+      best = (count: m, rhs: rhs, rows: idx-rows)
     }
   }
 
+  // Render straight from the winning split (stored above) — no re-derivation.
   let row-grids = ()
-  let i = 0
-  for r in range(0, best.count) {
-    let cnt = calc.min(calc.ceil(n / best.count), n - i)
-    if cnt > 0 {
-      let rh = best.rhs.at(r)
-      let cells = ()
-      for c in range(0, cnt) {
-        let im = images.at(i)
-        let cap = caps.at(i)
-        let iw = rh * ars.at(i)
-        cells.push(
-          grid(
-            columns: (iw,),
-            rows: (rh, auto),
-            row-gutter: 5pt,
-            align(center)[#image(
-              _clean-path(im.at("path", default: "")),
-              width: iw,
-              height: rh,
-              fit: "contain",
-            )],
-            if cap != none {
-              align(center)[#text(
-                size: 0.55em,
-                fill: self.store.accent,
-                style: "italic",
-              )[#cap]]
-            },
-          ),
-        )
-        i += 1
-      }
-      row-grids.push(grid(columns: (auto,) * cnt, column-gutter: g, ..cells))
+  for (r, idx) in best.rows.enumerate() {
+    let rh = best.rhs.at(r)
+    let cells = ()
+    for i in idx {
+      let im = images.at(i)
+      let cap = caps.at(i)
+      let iw = rh * ars.at(i)
+      cells.push(
+        grid(
+          columns: (iw,),
+          rows: (rh, auto),
+          row-gutter: 5pt,
+          align(center)[#image(
+            _clean-path(im.at("path", default: "")),
+            width: iw,
+            height: rh,
+            fit: "contain",
+          )],
+          if cap != none {
+            align(center)[#text(
+              size: 0.55em,
+              fill: self.store.accent,
+              style: "italic",
+            )[#cap]]
+          },
+        ),
+      )
     }
+    row-grids.push(grid(columns: (auto,) * idx.len(), column-gutter: g, ..cells))
   }
   block(height: H, breakable: false, align(center + horizon, grid(rows: (auto,)
       * best.count, row-gutter: g, align: center, ..row-grids)))
@@ -316,9 +304,9 @@
   set text(font: self.store.hfonts)
   pad(top: 1.15em, {
     set align(left + top)
-    grid(
-      columns: (1fr, auto),
-      column-gutter: 1em,
+      grid(
+        columns: (1fr, 38%),
+        column-gutter: 1em,
       align: (left + bottom, right + bottom),
       if title != none {
         pad(left: 1.5em, utils.fit-to-width(grow: false, 100%, text(
@@ -328,13 +316,15 @@
           title,
         )))
       } else { [] },
+      // Fixed 38% column + fit-to-width keeps a long section name on ONE
+      // line instead of wrapping and growing the header into the body.
       if section != none {
-        pad(right: 1.5em, text(
+        pad(right: 1.5em, utils.fit-to-width(grow: false, 100%, text(
           size: 0.55em,
           fill: _soft,
           font: self.store.bfonts,
           section,
-        ))
+        )))
       } else { [] },
     )
     v(0.45em, weak: true)
@@ -348,6 +338,8 @@
     self.info.title
   }
   // Whole footer lifts off the page edge by ~half a letter height.
+  // NB: text is 0.5em (10pt) here, so the 2.9em x-pad resolves to 29pt —
+  // deliberately close to the header title inset (1.5em at 20pt = 30pt).
   place(bottom, pad(
     x: 2.9em,
     bottom: 25pt,
@@ -379,7 +371,7 @@
       header: _header(self, title, section),
       footer: _footer(self),
     ),
-    pad(top: -_v-balance, _tile-layout(self, title, body, images)),
+    pad(top: -_v-balance, _tile-layout(self, body, images)),
   )
 })
 
@@ -434,7 +426,9 @@
           }
         }
       }
-      block(height: H, align(horizon + left, _shrink(self, content, W, H)))
+      // Unbreakable: a too-long list overflows rather than spawning a
+      // near-blank continuation page (_shrink usually prevents even that).
+      block(height: H, breakable: false, align(horizon + left, _shrink(self, content, W, H)))
     }),
   )
 })
@@ -554,6 +548,7 @@
   title-font: auto,
   body-font: auto,
   footer: auto,
+  lang: "ru",
   ..args,
   body,
 ) = {
@@ -562,7 +557,13 @@
   let bfonts = _resolve-fonts(body-font, _body-fonts)
   let footer-t = if footer != auto and footer != none { footer } else { none }
 
-  set text(size: _base-size, font: bfonts, lang: "ru", fill: _ink)
+  // Frontmatter can contain anything ("4:3", "16/9", "banana"); touying
+  // asserts on malformed ratios, so validate and fall back to 16-9.
+  let ar-s = str(aspect-ratio).trim()
+  let ar-ok = ar-s.matches(regex("^[0-9]+(\\.[0-9]+)?-[0-9]+(\\.[0-9]+)?$")).len() > 0
+  if not ar-ok { ar-s = "16-9" }
+
+  set text(size: _base-size, font: bfonts, lang: lang, fill: _ink)
   set par(justify: true, leading: 0.65em)
   set list(
     marker: text(fill: accent)[▪],
@@ -611,7 +612,7 @@
 
   show: touying-slides.with(
     config-page(
-      ..utils.page-args-from-aspect-ratio(aspect-ratio),
+      ..utils.page-args-from-aspect-ratio(ar-s),
       fill: _paper,
       margin: (top: 5.2em, bottom: 1.6em, x: 2.5em),
     ),

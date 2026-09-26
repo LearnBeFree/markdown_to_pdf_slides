@@ -8,48 +8,128 @@
 --   ### H3+ -> bold paragraph inside the current slide
 --   ![cap](img) as a standalone paragraph -> image "tile":
 --              passed via images: (...) to the layout engine
---   ```{=typst} raw block -> flushed verbatim at top level (power-user escape)
+--   ```{=typst} raw block -> flushed verbatim at top level (power-user
+--              escape hatch: it is compiled as-is, so invalid Typst inside
+--              aborts the build with an error pointing at that block)
 --
 -- Everything else (paragraphs, lists, tables, quotes, inline images) becomes
--- slide body text. Missing image files degrade to a dashed placeholder box
--- plus a stderr warning instead of a compile error.
+-- slide body text. Missing/unreadable images degrade to a dashed placeholder
+-- box plus a stderr warning instead of a compile error. Image paths are
+-- resolved to ABSOLUTE filesystem paths (relative to the source .md, its
+-- percent-decoded form, or the working directory), so the generated .typ can
+-- live anywhere as long as typst runs with `--root /` (see build.sh).
 
 local function esc_str(s)
   return (s:gsub('[\\"]', '\\%0'))
 end
 
-local function file_exists(path)
-  if not path or path == "" then return false end
-  local f = io.open(path, "r")
-  if f then f:close() return true end
+-- Metadata value that the typst writer must emit VERBATIM (file paths:
+-- template interpolation escapes characters like `_`, which corrupts them).
+local function meta_raw_typst(s)
+  return pandoc.MetaInlines({ pandoc.RawInline("typst", s) })
+end
+
+local function percent_decode(s)
+  return (s:gsub("%%(%x%x)", function(h) return string.char(tonumber(h, 16)) end))
+end
+
+local function input_dir()
   local base = PANDOC_STATE.input_files[1]
   if base then
-    local dir = base:match("^(.*)[/\\]") or "."
-    local f2 = io.open(dir .. "/" .. path, "r")
-    if f2 then f2:close() return true end
+    local dir = base:match("^(.*)[/\\]")
+    if dir and dir ~= "" then return dir end
   end
-  return false
+  return "."
+end
+
+-- True only for readable non-empty regular files: io.open also succeeds on
+-- directories (Linux), and a 0-byte file would crash typst's image decoder.
+local function sniff_image(f)
+  -- typst picks its decoder by file EXTENSION, so a wrong or unknown format
+  -- would abort the whole build; sniff magic bytes instead and degrade.
+  f:seek("set")
+  local head = f:read(16) or ""
+  if head:sub(1, 3) == "\255\216\255" then return "jpg" end
+  if head:sub(1, 8) == "\137PNG\r\n\26\n" then return "png" end
+  if head:sub(1, 6) == "GIF87a" or head:sub(1, 6) == "GIF89a" then return "gif" end
+  if head:sub(1, 4) == "RIFF" and head:sub(9, 12) == "WEBP" then return "webp" end
+  if head:match("^%s*<%?xml") or head:match("^%s*<svg") then return "svg" end
+  return nil
+end
+
+local function is_abs(p)
+  return p:sub(1, 1) == "/" or p:sub(1, 1) == "\\" or p:match("^[A-Za-z]:[/\\]") ~= nil
+end
+
+-- Resolve an image reference to an absolute, forward-slashed path that typst
+-- can load. Returns nil + reason when nothing matches, the file is not an
+-- image, or its extension does not fit the actual content.
+local function resolve_media(src)
+  if not src or src == "" then return nil, "empty path" end
+  local dir = input_dir()
+  local cwd = pandoc.system.get_working_directory()
+  local cands = {}
+  local variants = { src }
+  local dec = percent_decode(src)
+  if dec ~= src then variants[#variants + 1] = dec end
+  for _, v in ipairs(variants) do
+    if is_abs(v) then
+      cands[#cands + 1] = v
+    else
+      cands[#cands + 1] = dir .. "/" .. v
+      cands[#cands + 1] = cwd .. "/" .. v
+    end
+  end
+  for _, p in ipairs(cands) do
+    local f = io.open(p, "rb")
+    if f then
+      local ok, size = pcall(function() return f:seek("end") end)
+      if ok and size ~= nil and size > 0 then
+        local kind = sniff_image(f)
+        f:close()
+        if kind == nil then
+          return nil, "not an image (supported: png, jpg/jpeg, gif, webp, svg): " .. p
+        end
+        local e = (p:match("%.(%w+)%s*$") or ""):lower()
+        local ext_ok = e == kind or (kind == "jpg" and e == "jpeg")
+        if not ext_ok then
+          return nil, "extension ." .. e .. " does not match detected " .. kind
+            .. " content (typst decodes by extension): " .. p
+        end
+        return (p:gsub("\\", "/"))
+      end
+      f:close()
+    end
+  end
+  return nil, "not found"
 end
 
 local function placeholder_box(label)
+  -- The label is injected as a Typst STRING (not markup), so characters like
+  -- # $ [ ] in filenames cannot break parsing.
   return '#box(width: 100%, height: 110pt, stroke: (paint: rgb("#9A9186"), '
     .. 'thickness: 0.8pt, dash: "dashed"), radius: 4pt)'
     .. '[#align(center + horizon)[#text(fill: rgb("#9A9186"), size: 0.8em)['
-    .. esc_str(label) .. ']]]'
+    .. '#("' .. esc_str(label) .. '")'
+    .. ']]]'
 end
 
 local function image_to_raw(img)
-  local src = img.src or ""
-  if not file_exists(src) then
-    io.stderr:write("WARNING: image not found: ", src, "\n")
-    return pandoc.RawInline("typst", placeholder_box("нет изображения: " .. src))
+  local p, err = resolve_media(img.src or "")
+  if not p then
+    io.stderr:write("WARNING: skipping image ", img.src or "", " (", err, ")\n")
+    return pandoc.RawInline("typst", placeholder_box("нет изображения: " .. (img.src or "")))
   end
-  return pandoc.RawInline("typst", '#image("' .. esc_str(src) .. '")')
+  return pandoc.RawInline("typst", '#image("' .. esc_str(p) .. '")')
 end
 
 local function write_block(b)
   local walked = pandoc.walk_block(b, { Image = image_to_raw })
-  return pandoc.write(pandoc.Pandoc({ walked }), "typst")
+  local s = pandoc.write(pandoc.Pandoc({ walked }), "typst")
+  -- Pandoc hardcodes a cramped `inset: <n>pt` on every table; widen the cell
+  -- padding here, scoped to writer output only (a sed over the whole file
+  -- would also mangle user ```{=typst}``` blocks).
+  return (s:gsub("inset: [0-9.]+pt", "inset: (x: 0.95em, y: 0.72em)"))
 end
 
 local function ser_inlines(inlines)
@@ -119,9 +199,22 @@ function Pandoc(doc)
   local cover = meta["cover-image"]
   if cover then
     local p = pandoc.utils.stringify(cover)
-    if p ~= "" and not file_exists(p) then
-      io.stderr:write("WARNING: cover-image not found, using light title slide: ", p, "\n")
+    local r, err = resolve_media(p)
+    if p ~= "" and not r then
+      io.stderr:write("WARNING: cover-image ", err, " — using light title slide\n")
       meta["cover-image"] = nil
+    elseif r then
+      -- absolute path so the cover also loads when the .typ lives elsewhere
+      meta["cover-image"] = meta_raw_typst(esc_str(r))
+    end
+  end
+
+  -- build.sh/ps1 export THEME_DIR so the template can import slides-theme.typ
+  -- by absolute path (the generated .typ may live next to the source .md).
+  if not meta["theme-dir"] then
+    local tdir = os.getenv("THEME_DIR")
+    if tdir and tdir ~= "" then
+      meta["theme-dir"] = meta_raw_typst(esc_str((tdir:gsub("\\", "/"))))
     end
   end
 
@@ -176,10 +269,6 @@ function Pandoc(doc)
       body_blocks, images = {}, {}
       return
     end
-    if title == nil and not has_content then
-      body_blocks, images = {}, {}
-      return
-    end
     if #images >= 2 then
       -- Image-only mode: >=2 images move to a clean gallery slide;
       -- accompanying text (if any) goes to a separate titled slide first.
@@ -220,10 +309,11 @@ function Pandoc(doc)
       local tiles = as_image_tiles(b)
       if #tiles > 0 then
         for _, tile in ipairs(tiles) do
-          if file_exists(tile.path) then
-            images[#images + 1] = tile
+          local p, err = resolve_media(tile.path)
+          if p then
+            images[#images + 1] = { path = p, caption = tile.caption }
           else
-            io.stderr:write("WARNING: image not found: ", tile.path, "\n")
+            io.stderr:write("WARNING: skipping image ", tile.path, " (", err, ")\n")
             body_blocks[#body_blocks + 1] =
               pandoc.Plain(pandoc.RawInline("typst", placeholder_box("нет изображения: " .. tile.path)))
           end
