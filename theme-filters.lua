@@ -238,18 +238,9 @@ function Pandoc(doc)
     end
   end
 
-  -- build.sh/ps1 export THEME_DIR so the template can import slides-theme.typ
-  -- (emitted root-relative on Windows: the staging copy lives on the deck's
-  -- drive, which is exactly the compile root).
-  if not meta["theme-dir"] then
-    local tdir = os.getenv("THEME_DIR")
-    if tdir and tdir ~= "" then
-      local tpath = to_typst_path((tdir:gsub("\\", "/")))
-      if tpath then
-        meta["theme-dir"] = meta_raw_typst(esc_str(tpath))
-      end
-    end
-  end
+  -- build.sh copies slides-theme.typ next to the generated .typ, so the
+  -- template imports it as a sibling file: no THEME_DIR env var (it mangles
+  -- non-ASCII paths on Windows) and no absolute theme paths in the source.
 
   local out = {}
   local section, title = nil, nil

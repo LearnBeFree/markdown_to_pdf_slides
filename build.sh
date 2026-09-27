@@ -30,15 +30,17 @@ BASE="$(basename "$SRC_ABS")"
 BASE="${BASE%.*}"
 PDF="$SRC_DIR/$BASE.pdf"
 
-# The generated .typ is an intermediate: it goes to a temp dir that is
-# removed after the build (PDF stays next to the source). Set
-# SLIDES_KEEP_TYP=1 to keep the .typ beside the .md for debugging.
+# Stage the build: a temp workdir holds the generated .typ plus a copy of
+# slides-theme.typ, so the source imports the theme as a SIBLING file —
+# no absolute theme paths, no env vars (both proved fragile with non-ASCII
+# paths on Windows). The workdir is auto-deleted; only the PDF stays next
+# to the source. Set SLIDES_KEEP_TYP=1 to keep the .typ (and the theme
+# copy) beside the .md for debugging.
 #
-# Typst needs ONE root that contains the .typ, the theme import and every
-# referenced image. On Unix "/" always qualifies. Windows drives have no
-# common root (repo on C:, deck on E:), so there the build is staged on the
-# SOURCE's drive: workdir next to the source (auto-deleted), theme copied
-# into it, root = the source's drive root (e.g. "E:/").
+# Typst needs ONE root that contains the .typ, the theme and every image.
+# On Unix "/" always qualifies. Windows drives have no common root (repo
+# on C:, deck on E:), so there the workdir sits next to the source and
+# root = the source's drive root (e.g. "E:/").
 IS_WIN=0
 case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) IS_WIN=1 ;; esac
 
@@ -50,17 +52,19 @@ if [ "$IS_WIN" = 1 ]; then
     exit 1
   fi
   WORK_DIR="$(mktemp -d "$SRC_DIR/.slides-build.XXXXXX")"
-  TYP="$WORK_DIR/$BASE.typ"
-  cp "$SCRIPT_DIR/slides-theme.typ" "$WORK_DIR/slides-theme.typ"
-  THEME_FOR_PANDOC="$(cygpath -m "$WORK_DIR")"
 else
   ROOT="/"
   WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/slides-build.XXXXXX")"
-  TYP="$WORK_DIR/$BASE.typ"
-  THEME_FOR_PANDOC="$SCRIPT_DIR"
 fi
+
 if [ "${SLIDES_KEEP_TYP:-0}" = "1" ]; then
   TYP="$SRC_DIR/$BASE.typ"
+else
+  TYP="$WORK_DIR/$BASE.typ"
+fi
+TYP_DIR="$(dirname "$TYP")"
+if [ "$TYP_DIR" != "$SCRIPT_DIR" ]; then
+  cp "$SCRIPT_DIR/slides-theme.typ" "$TYP_DIR/"
 fi
 trap 'rm -rf "$WORK_DIR"' EXIT
 
@@ -74,7 +78,7 @@ fi
 #                                 instead of silently dropping raw TeX
 #   +wikilinks_title_after_pipe   Obsidian `![[pic.png]]` embeds become real
 #                                 images the filter can lay out
-THEME_DIR="$THEME_FOR_PANDOC" pandoc "$SRC_ABS" \
+pandoc "$SRC_ABS" \
   --from markdown-raw_tex+wikilinks_title_after_pipe \
   --to typst \
   --standalone \
@@ -82,8 +86,8 @@ THEME_DIR="$THEME_FOR_PANDOC" pandoc "$SRC_ABS" \
   --lua-filter "$SCRIPT_DIR/theme-filters.lua" \
   --output "$TYP"
 
-# The filter emits absolute image paths and the staged .typ is on the
-# source's drive, so root covers everything (Unix: "/", Windows: "E:/").
+# The filter emits root-relative image paths and the staged .typ sits next
+# to its theme copy, so root covers everything (Unix: "/", Windows: "E:/").
 typst compile --root "$ROOT" "${FONT_ARGS[@]}" "$TYP" "$PDF"
 
 echo "Built: $PDF"

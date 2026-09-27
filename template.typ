@@ -10,17 +10,12 @@
 // Missing values fall back to safe defaults inside slides-theme.typ;
 // a missing/nonexistent cover-image yields a clean light title slide.
 //
-// The build scripts also pass theme-dir=<absolute theme dir> so the
-// generated .typ can live next to the source markdown anywhere on disk;
-// without it the theme is imported as a sibling file.
+// The build stages a copy of slides-theme.typ next to the generated .typ,
+// so the import is a plain sibling reference: no absolute theme paths and
+// no env vars (both mangle non-ASCII paths on Windows).
 
 #import "@preview/touying:0.7.4": *
-$if(theme-dir)$
-#let _theme-file = "$theme-dir$/slides-theme.typ"
-$else$
-#let _theme-file = "slides-theme.typ"
-$endif$
-#import (_theme-file): *
+#import "slides-theme.typ": *
 
 #let _accent-raw = "$if(accent-color)$$accent-color$$endif$"
 #let _title-font-raw = "$if(title-font)$$title-font$$endif$"
