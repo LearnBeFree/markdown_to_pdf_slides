@@ -61,6 +61,33 @@ local function is_abs(p)
   return p:sub(1, 1) == "/" or p:sub(1, 1) == "\\" or p:match("^[A-Za-z]:[/\\]") ~= nil
 end
 
+-- Typst paths inside a source file are VIRTUAL ("/x/y", resolved against
+-- the compile root). A Windows drive-absolute path ("E:/x") is rejected by
+-- typst ("path contains invalid component E:"), so strip the deck's drive
+-- prefix (the build scripts set --root to exactly that drive). Existence
+-- checks above still use the real "E:/x" form; only the EMITTED path is
+-- converted. POSIX paths pass through unchanged.
+local function input_drive()
+  local base = PANDOC_STATE.input_files[1] or ""
+  return base:match("^([A-Za-z]:)[/\\]")
+end
+
+local function to_typst_path(p)
+  local drv = input_drive()
+  if drv then
+    if p:sub(1, 2):lower() == drv:lower() then
+      local rest = (p:sub(3):gsub("\\", "/"))
+      if rest:sub(1, 1) == "/" then return rest end
+      return "/" .. rest
+    end
+    if p:match("^[A-Za-z]:") then
+      return nil, "on drive " .. p:sub(1, 2) .. " while the deck is on " .. drv
+        .. " (typst allows a single root per compile)"
+    end
+  end
+  return p
+end
+
 -- Resolve an image reference to an absolute, forward-slashed path that typst
 -- can load. Returns nil + reason when nothing matches, the file is not an
 -- image, or its extension does not fit the actual content.
@@ -96,7 +123,9 @@ local function resolve_media(src)
           return nil, "extension ." .. e .. " does not match detected " .. kind
             .. " content (typst decodes by extension): " .. p
         end
-        return (p:gsub("\\", "/"))
+        local tp, terr = to_typst_path((p:gsub("\\", "/")))
+        if tp then return tp end
+        return nil, terr
       end
       f:close()
     end
@@ -210,11 +239,15 @@ function Pandoc(doc)
   end
 
   -- build.sh/ps1 export THEME_DIR so the template can import slides-theme.typ
-  -- by absolute path (the generated .typ may live next to the source .md).
+  -- (emitted root-relative on Windows: the staging copy lives on the deck's
+  -- drive, which is exactly the compile root).
   if not meta["theme-dir"] then
     local tdir = os.getenv("THEME_DIR")
     if tdir and tdir ~= "" then
-      meta["theme-dir"] = meta_raw_typst(esc_str((tdir:gsub("\\", "/"))))
+      local tpath = to_typst_path((tdir:gsub("\\", "/")))
+      if tpath then
+        meta["theme-dir"] = meta_raw_typst(esc_str(tpath))
+      end
     end
   end
 
