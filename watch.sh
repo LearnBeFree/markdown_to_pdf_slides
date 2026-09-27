@@ -151,7 +151,8 @@ deck_assets() {
     [ -n "$p" ] || continue
     case "$p" in /*) ;; *) p="$SRC_DIR/$p" ;; esac
     p="$(printf '%s' "$p" | sed 's/%20/ /g; s/%5B/[/g; s/%5D/]/g')"
-    [ -f "$p" ] && printf '%s\n' "$p"
+    # NB: `if`, not `[ -f ] && printf`, so set -e survives a missing last asset
+    if [ -f "$p" ]; then printf '%s\n' "$p"; fi
   done | sort -u
 }
 

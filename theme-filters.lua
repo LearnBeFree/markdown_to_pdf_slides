@@ -88,6 +88,32 @@ local function to_typst_path(p)
   return p
 end
 
+-- Native Lua on Windows opens files through the ANSI code page, so any
+-- path with non-ASCII characters (UTF-8 Cyrillic, etc.) fails io.open even
+-- when the file exists — the existence check itself is broken there.
+-- typst handles Unicode paths natively, so in that case we emit the
+-- constructed path UNVERIFIED and let typst be the judge (it reports a
+-- clear "file not found" for genuinely broken references).
+local ON_WINDOWS = package.config:sub(1, 1) == "\\"
+
+local function unverifiable_on_windows(p)
+  return ON_WINDOWS and p:find("[\128-\255]", 1) ~= nil
+end
+
+-- build.sh pre-checks every image reference with bash (which handles
+-- Unicode paths natively on Windows) and passes the MISSING ones to us via
+-- --metadata on the command line — argv being the one channel that carries
+-- Unicode safely into native pandoc. This lets the trust branch below keep
+-- producing friendly placeholders for genuinely missing files instead of
+-- failing later in typst.
+local MISSING_REFS = {}
+
+local function remember_missing(joined)
+  for ref in joined:gmatch("[^\31]+") do
+    MISSING_REFS[ref] = true
+  end
+end
+
 -- Resolve an image reference to an absolute, forward-slashed path that typst
 -- can load. Returns nil + reason when nothing matches, the file is not an
 -- image, or its extension does not fit the actual content.
@@ -128,6 +154,12 @@ local function resolve_media(src)
         return nil, terr
       end
       f:close()
+    elseif unverifiable_on_windows(p) then
+      -- bash pre-checked this ref: listed as missing -> placeholder
+      if MISSING_REFS[src] then return nil, "not found" end
+      local tp, terr = to_typst_path((p:gsub("\\", "/")))
+      if tp then return tp end
+      return nil, terr
     end
   end
   return nil, "not found"
@@ -221,9 +253,17 @@ local function as_image_tiles(b)
   end
   return tiles
 end
-
 function Pandoc(doc)
+
   local meta = doc.meta
+
+  -- must run BEFORE any resolve_media call (it feeds the Windows trust
+  -- branch with bash's Unicode-safe existence check)
+  do
+    local m = meta["missing-images"]
+    if m then remember_missing(pandoc.utils.stringify(m)) end
+    meta["missing-images"] = nil
+  end
 
   local cover = meta["cover-image"]
   if cover then

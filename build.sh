@@ -73,12 +73,49 @@ if [ -d "$SCRIPT_DIR/fonts" ]; then
   FONT_ARGS=(--font-path "$SCRIPT_DIR/fonts")
 fi
 
+# Pre-scan image references and check them HERE with bash: on Windows,
+# Lua's io.open inside native pandoc.exe goes through the ANSI code page
+# and cannot see non-ASCII (UTF-8) paths, so the filter alone can't tell a
+# missing image from a Cyrillic one. The missing refs travel to the filter
+# via --metadata (argv — the one Unicode-safe channel into pandoc), joined
+# with \031 (control chars cannot appear in filenames). The filter then
+# keeps rendering friendly placeholders instead of failing in typst.
+MISSING_ARGS=()
+{
+  # ![alt](path) — including <path with spaces> "title"
+  { grep -oE '!\[[^]]*\]\([^)]+\)' "$SRC_ABS" 2>/dev/null \
+      | sed -E 's/^!\[[^]]*\]\(//; s/\)$//; s/^<//; s/>.*$//; s/[[:space:]]*".*$//' || true; }
+  # Obsidian ![[p.png]] / [[p|alias]] / [[p]]
+  { grep -oE '!?\[\[[^]]+\]\]' "$SRC_ABS" 2>/dev/null \
+      | sed -E 's/^!?\[\[//; s/\]\]$//; s/\|.*$//' || true; }
+  # cover from frontmatter
+  { grep -iE '^[[:space:]]*cover-image:' "$SRC_ABS" 2>/dev/null \
+      | sed -E 's/^[^:]*:[[:space:]]*//; s/"//g' || true; }
+} | while IFS= read -r ref; do
+  [ -n "$ref" ] || continue
+  dec="$(printf '%s' "$ref" | sed 's/%20/ /g; s/%5B/[/g; s/%5D/]/g')"
+  found=0
+  for p in "$ref" "$dec"; do
+    case "$p" in /*) full="$p" ;; *) full="$SRC_DIR/$p" ;; esac
+    if [ -f "$full" ]; then found=1; break; fi
+  done
+  # NB: an `if` (not `[ ] && printf`) so the loop body never returns false
+  # under set -e when the last ref happens to exist.
+  if [ "$found" = 0 ]; then printf '%s\n' "$ref"; fi
+done > "$WORK_DIR/missing.txt"
+
+if [ -s "$WORK_DIR/missing.txt" ]; then
+  # \037 (octal) == byte 31 decimal == Lua "\31" (unit separator)
+  MISSING_ARGS=(--metadata "missing-images=$(paste -sd $'\037' "$WORK_DIR/missing.txt")")
+fi
+
 # Extension tweaks:
 #   -raw_tex                      keep `\word` sequences as literal text
 #                                 instead of silently dropping raw TeX
 #   +wikilinks_title_after_pipe   Obsidian `![[pic.png]]` embeds become real
 #                                 images the filter can lay out
 pandoc "$SRC_ABS" \
+  "${MISSING_ARGS[@]}" \
   --from markdown-raw_tex+wikilinks_title_after_pipe \
   --to typst \
   --standalone \
