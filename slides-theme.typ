@@ -14,6 +14,10 @@
 // full-height side column, landscape images to a bottom band. Body text
 // auto-shrinks from the base size (20pt) down to _min-size (14pt); below
 // that it is rendered at _min-size and allowed to overflow.
+//
+// Geometry invariant: the footer lives INSIDE the page's bottom margin
+// (_bottom-margin sizes the margin to the footer's real footprint), so
+// bottom-flush image tiles can never render under the footer text.
 
 #import "@preview/touying:0.7.4": *
 
@@ -27,10 +31,28 @@
 #let _min-size = 14pt
 #let _gutter = 12pt
 // Optical vertical balance: the header rule sits ~47pt above the content
-// box while the footer text starts ~17pt below it; lifting the content by
-// half the difference centers it optically between rule and footer.
+// box while the footer starts ~10pt below it (the _foot-clear gap); the
+// small lift nudges content toward the optical center between the two.
 #let _v-balance = 15pt
 #let _shrink-steps = range(int(_base-size / 1pt), int(_min-size / 1pt) - 1, step: -1).map(i => i * 1pt)
+
+// Footer geometry (measured on a 100dpi render; see _footer). The footer
+// stack [text row][gap][progress bar] is anchored page-wide so its bottom
+// sits ~11pt above the page edge. The bottom margin must keep the WHOLE
+// stack below the content box, otherwise bottom-flush image tiles render
+// under the footer text (the overlap bug this replaces).
+#let _foot-lift = 11pt // stack bottom above the page edge
+#let _foot-text-h = 9.5pt // 10pt footer text row (measured 9.36pt)
+#let _foot-gap = 10pt // text row -> progress bar (measured 10.08pt)
+#let _foot-bar-h = 2.5pt
+#let _foot-clear = 10pt // breathing room between content box and footer
+
+// Bottom margin that fits the footer (plus clearance) under the content
+// box. Without the bar the footer is shorter, so the margin shrinks too
+// and content slides keep as much room as possible.
+#let _bottom-margin(bar) = _foot-lift + _foot-text-h + (
+  if bar { _foot-gap + _foot-bar-h } else { 0pt }
+) + _foot-clear
 
 #let _display-fonts = ("Oswald", "Liberation Sans", "Carlito", "FreeSans")
 #let _body-fonts = ("Philosopher", "Liberation Serif", "Caladea", "FreeSerif")
@@ -332,30 +354,37 @@
   })
 }
 
-#let _footer(self) = {
+#let _footer(self, bar) = {
   set text(size: 0.5em, fill: _soft, font: self.store.bfonts)
   let deck = if self.store.footer != none { self.store.footer } else {
     self.info.title
   }
-  // Whole footer lifts off the page edge by ~half a letter height.
+  // Single grid => deterministic footprint: [text row] + optional [bar].
+  // The constants above (_foot-*) must stay in sync with what renders here.
   // NB: text is 0.5em (10pt) here, so the 2.9em x-pad resolves to 29pt —
   // deliberately close to the header title inset (1.5em at 20pt = 30pt).
+  // The `bottom: _foot-lift` anchor only holds while the stack fits the
+  // footer region (_bottom-margin guarantees pad+stack+clear <= margin);
+  // past that Typst starts pinning/clipping the stack and all bets are off.
+  let rows = (auto,)
+  let cells = (grid(
+    columns: (1fr, auto),
+    align: (left, right),
+    if deck != none { deck } else { [] },
+    context utils.slide-counter.display() + " / " + utils.last-slide-number,
+  ),)
+  if bar {
+    rows.push(auto)
+    cells.push(components.progress-bar(
+      height: _foot-bar-h,
+      self.store.accent,
+      self.store.accent.lighten(84%),
+    ))
+  }
   place(bottom, pad(
     x: 2.9em,
-    bottom: 25pt,
-    {
-      grid(
-        columns: (1fr, auto),
-        align: (left, right),
-        if deck != none { deck } else { [] },
-        context utils.slide-counter.display() + " / " + utils.last-slide-number,
-      )
-      components.progress-bar(
-        height: 2.5pt,
-        self.store.accent,
-        self.store.accent.lighten(84%),
-      )
-    },
+    bottom: _foot-lift,
+    grid(rows: rows, row-gutter: if bar { _foot-gap } else { 0pt }, ..cells),
   ))
 }
 
@@ -365,11 +394,15 @@
   body: none,
   images: (),
 ) = touying-slide-wrapper(self => {
+  let bar = self.store.progress-bar
   touying-slide(
     self: self,
     config: config-page(
+      // Bottom margin follows the actual footer height: no bar -> the
+      // footer (and the reserved space under it) shrinks accordingly.
+      margin: (top: 5.2em, bottom: _bottom-margin(bar), x: 2.5em),
       header: _header(self, title, section),
-      footer: _footer(self),
+      footer: _footer(self, bar),
     ),
     pad(top: -_v-balance, _tile-layout(self, body, images)),
   )
@@ -378,12 +411,13 @@
 #let section-slide(body) = touying-slide-wrapper(self => {
   touying-slide(
     self: self,
-    // No header here, so use symmetric top/bottom margins: the content box
-    // then shares its center with the page and the title sits dead-center.
+    // No header here; symmetric top/bottom margins keep the title
+    // dead-center. Section dividers always show the progress bar, so
+    // both margins fit the taller footer.
     config: config-page(
-      margin: (top: 1.6em, bottom: 1.6em, x: 2.5em),
+      margin: (top: _bottom-margin(true), bottom: _bottom-margin(true), x: 2.5em),
       header: none,
-      footer: _footer(self),
+      footer: _footer(self, true),
     ),
     align(horizon, {
       set text(font: self.store.hfonts, fill: self.store.accent)
@@ -548,6 +582,7 @@
   title-font: auto,
   body-font: auto,
   footer: auto,
+  progress-bar: auto,
   lang: "ru",
   ..args,
   body,
@@ -556,6 +591,9 @@
   let hfonts = _resolve-fonts(title-font, _display-fonts)
   let bfonts = _resolve-fonts(body-font, _body-fonts)
   let footer-t = if footer != auto and footer != none { footer } else { none }
+  // Frontmatter `progress-bar: true` shows the progress bar on CONTENT
+  // slides as well; section dividers always have it. Default: hidden.
+  let show-bar = lower(_cstr(progress-bar).trim()) in ("true", "yes", "on", "1")
 
   // Frontmatter can contain anything ("4:3", "16/9", "banana"); touying
   // asserts on malformed ratios, so validate and fall back to 16-9.
@@ -614,7 +652,9 @@
     config-page(
       ..utils.page-args-from-aspect-ratio(ar-s),
       fill: _paper,
-      margin: (top: 5.2em, bottom: 1.6em, x: 2.5em),
+      // Fallback for slides without their own margin: fit the tallest
+      // (bar-bearing) footer under the content box.
+      margin: (top: 5.2em, bottom: _bottom-margin(true), x: 2.5em),
     ),
     config-colors(primary: accent),
     config-store(
@@ -622,6 +662,7 @@
       hfonts: hfonts,
       bfonts: bfonts,
       footer: footer-t,
+      progress-bar: show-bar,
     ),
     ..args,
   )

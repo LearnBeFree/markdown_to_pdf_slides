@@ -5,6 +5,8 @@
 //   title, subtitle, author, date, institution,
 //   accent-color ("#8B0000" or "8B0000"), title-font, body-font, cover-image,
 //   toc (false hides the outline slide that otherwise follows the title),
+//   progress-bar (true shows the footer progress bar on content slides;
+//     section dividers always have it; default: hidden on content slides),
 //   aspect-ratio ("16-9"; anything not W-H shaped falls back to 16-9),
 //   lang (BCP-47, defaults to "ru"; drives hyphenation/quotes).
 // Missing values fall back to safe defaults inside slides-theme.typ;
@@ -22,12 +24,14 @@
 #let _body-font-raw = "$if(body-font)$$body-font$$endif$"
 #let _cover-raw = "$if(cover-image)$$cover-image$$endif$"
 #let _aspect-raw = "$if(aspect-ratio)$$aspect-ratio$$else$16-9$endif$"
+#let _progress-raw = "$if(progress-bar)$$progress-bar$$endif$"
 
 #show: slides-theme.with(
   aspect-ratio: _aspect-raw,
   accent: _accent-raw,
   title-font: _title-font-raw,
   body-font: _body-font-raw,
+  progress-bar: _progress-raw,
   $if(lang)$lang: "$lang$",$endif$
   // Only set info fields that are actually present: passing empty content to
   // touying's config-info would make markup-text() return none and crash
