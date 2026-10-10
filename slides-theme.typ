@@ -22,9 +22,16 @@
 #import "@preview/touying:0.7.4": *
 
 #let _accent-default = rgb("#8B0000")
+// Two palettes share the accent color; the `dark_theme` frontmatter
+// flag (parsed in slides-theme) picks the dark one. Light is the default.
+// The dark palette is strictly neutral (no warm tint) so text and accents
+// stay clean on the near-black paper.
 #let _ink = rgb("#2B2723")
 #let _soft = rgb("#8A8178")
 #let _paper = rgb("#FDFCF9")
+#let _ink-d = rgb("#EDEDED")
+#let _soft-d = rgb("#9C9C9C")
+#let _paper-d = rgb("#111111")
 #let _cream = rgb("#FAF6EC")
 
 #let _base-size = 20pt
@@ -34,7 +41,11 @@
 // box while the footer starts ~10pt below it (the _foot-clear gap); the
 // small lift nudges content toward the optical center between the two.
 #let _v-balance = 15pt
-#let _shrink-steps = range(int(_base-size / 1pt), int(_min-size / 1pt) - 1, step: -1).map(i => i * 1pt)
+#let _shrink-steps = range(
+  int(_base-size / 1pt),
+  int(_min-size / 1pt) - 1,
+  step: -1,
+).map(i => i * 1pt)
 
 // Footer geometry (measured on a 100dpi render; see _footer). The footer
 // stack [text row][gap][progress bar] is anchored page-wide so its bottom
@@ -50,9 +61,14 @@
 // Bottom margin that fits the footer (plus clearance) under the content
 // box. Without the bar the footer is shorter, so the margin shrinks too
 // and content slides keep as much room as possible.
-#let _bottom-margin(bar) = _foot-lift + _foot-text-h + (
-  if bar { _foot-gap + _foot-bar-h } else { 0pt }
-) + _foot-clear
+#let _bottom-margin(bar) = (
+  _foot-lift
+    + _foot-text-h
+    + (
+      if bar { _foot-gap + _foot-bar-h } else { 0pt }
+    )
+    + _foot-clear
+)
 
 #let _display-fonts = ("Oswald", "Liberation Sans", "Carlito", "FreeSans")
 #let _body-fonts = ("Philosopher", "Liberation Serif", "Caladea", "FreeSerif")
@@ -135,7 +151,7 @@
         align(center + horizon)[#box(width: 100%, height: 100%)[#pic]],
         align(center)[#text(
           size: 0.55em,
-          fill: self.store.accent,
+          fill: self.store.accent-text,
           style: "italic",
         )[#cap]],
       )
@@ -162,7 +178,12 @@
         body
       }))
       let al = if mm.height <= H { horizon } else { top }
-      block(height: H, breakable: false, align(al + left, _shrink(self, body, W, H)))
+      block(height: H, breakable: false, align(al + left, _shrink(
+        self,
+        body,
+        W,
+        H,
+      )))
     } else { [] }
   } else if not has-text {
     align(center + horizon, _img-tile(self, images.at(0), W, H))
@@ -298,14 +319,15 @@
           if cap != none {
             align(center)[#text(
               size: 0.55em,
-              fill: self.store.accent,
+              fill: self.store.accent-text,
               style: "italic",
             )[#cap]]
           },
         ),
       )
     }
-    row-grids.push(grid(columns: (auto,) * idx.len(), column-gutter: g, ..cells))
+    row-grids.push(grid(columns: (auto,)
+        * idx.len(), column-gutter: g, ..cells))
   }
   block(height: H, breakable: false, align(center + horizon, grid(rows: (auto,)
       * best.count, row-gutter: g, align: center, ..row-grids)))
@@ -326,14 +348,14 @@
   set text(font: self.store.hfonts)
   pad(top: 1.15em, {
     set align(left + top)
-      grid(
-        columns: (1fr, 38%),
-        column-gutter: 1em,
+    grid(
+      columns: (1fr, 38%),
+      column-gutter: 1em,
       align: (left + bottom, right + bottom),
       if title != none {
         pad(left: 1.5em, utils.fit-to-width(grow: false, 100%, text(
           size: 1.6em,
-          fill: self.store.accent,
+          fill: self.store.accent-text,
           weight: "bold",
           title,
         )))
@@ -343,7 +365,7 @@
       if section != none {
         pad(right: 1.5em, utils.fit-to-width(grow: false, 100%, text(
           size: 0.55em,
-          fill: _soft,
+          fill: self.store.soft,
           font: self.store.bfonts,
           section,
         )))
@@ -355,7 +377,7 @@
 }
 
 #let _footer(self, bar) = {
-  set text(size: 0.5em, fill: _soft, font: self.store.bfonts)
+  set text(size: 0.5em, fill: self.store.soft, font: self.store.bfonts)
   let deck = if self.store.footer != none { self.store.footer } else {
     self.info.title
   }
@@ -367,18 +389,29 @@
   // footer region (_bottom-margin guarantees pad+stack+clear <= margin);
   // past that Typst starts pinning/clipping the stack and all bets are off.
   let rows = (auto,)
-  let cells = (grid(
-    columns: (1fr, auto),
-    align: (left, right),
-    if deck != none { deck } else { [] },
-    context utils.slide-counter.display() + " / " + utils.last-slide-number,
-  ),)
+  let cells = (
+    grid(
+      columns: (1fr, auto),
+      align: (left, right),
+      if deck != none { deck } else { [] },
+      context utils.slide-counter.display() + " / " + utils.last-slide-number,
+    ),
+  )
   if bar {
     rows.push(auto)
+    // Track tint follows the palette: a light wash on white paper; on dark
+    // paper both segments lift (lighten(84%) would glow) — the filled part
+    // stays brighter so progress still reads at full strength.
+    let fg = if self.store.dark { self.store.accent.lighten(30%) } else {
+      self.store.accent
+    }
+    let bg = if self.store.dark { self.store.accent.lighten(10%) } else {
+      self.store.accent.lighten(84%)
+    }
     cells.push(components.progress-bar(
       height: _foot-bar-h,
-      self.store.accent,
-      self.store.accent.lighten(84%),
+      fg,
+      bg,
     ))
   }
   place(bottom, pad(
@@ -415,12 +448,16 @@
     // dead-center. Section dividers always show the progress bar, so
     // both margins fit the taller footer.
     config: config-page(
-      margin: (top: _bottom-margin(true), bottom: _bottom-margin(true), x: 2.5em),
+      margin: (
+        top: _bottom-margin(true),
+        bottom: _bottom-margin(true),
+        x: 2.5em,
+      ),
       header: none,
       footer: _footer(self, true),
     ),
     align(horizon, {
-      set text(font: self.store.hfonts, fill: self.store.accent)
+      set text(font: self.store.hfonts, fill: self.store.accent-text)
       set align(center)
       text(size: 1.7em, weight: "bold", body)
     }),
@@ -451,7 +488,7 @@
             text(
               size: 0.85em,
               weight: "bold",
-              fill: self.store.accent,
+              fill: self.store.accent-text,
             )[#n. #e.text]
             v(0.5em)
           } else {
@@ -462,7 +499,12 @@
       }
       // Unbreakable: a too-long list overflows rather than spawning a
       // near-blank continuation page (_shrink usually prevents even that).
-      block(height: H, breakable: false, align(horizon + left, _shrink(self, content, W, H)))
+      block(height: H, breakable: false, align(horizon + left, _shrink(
+        self,
+        content,
+        W,
+        H,
+      )))
     }),
   )
 })
@@ -557,7 +599,7 @@
             size: 1.8em,
             font: self.store.hfonts,
             weight: "bold",
-            fill: _ink,
+            fill: self.store.ink,
             info.title,
           )
         }
@@ -565,11 +607,11 @@
         line(length: 15%, stroke: 3pt + self.store.accent)
         if info.subtitle != none {
           v(0.8em)
-          text(size: 0.95em, fill: _soft, info.subtitle)
+          text(size: 0.95em, fill: self.store.soft, info.subtitle)
         }
         if meta-line != "" {
           v(1.4em)
-          text(size: 0.65em, fill: _soft, meta-line)
+          text(size: 0.65em, fill: self.store.soft, meta-line)
         }
       }),
     )
@@ -583,6 +625,7 @@
   body-font: auto,
   footer: auto,
   progress-bar: auto,
+  dark-theme: auto,
   lang: "ru",
   ..args,
   body,
@@ -594,40 +637,60 @@
   // Frontmatter `progress-bar: true` shows the progress bar on CONTENT
   // slides as well; section dividers always have it. Default: hidden.
   let show-bar = lower(_cstr(progress-bar).trim()) in ("true", "yes", "on", "1")
+  // Frontmatter `dark_theme: true` swaps ink/soft/paper for the dark
+  // palette; the accent color is shared by both themes. Default: light.
+  let dark = lower(_cstr(dark-theme).trim()) in ("true", "yes", "on", "1")
+  let ink = if dark { _ink-d } else { _ink }
+  let soft = if dark { _soft-d } else { _soft }
+  let paper = if dark { _paper-d } else { _paper }
+  // Full-strength accent stays on decorative uses (rules, borders, fills);
+  // text drawn IN accent is lifted on dark paper, else a dark accent
+  // (#2c3e50) would be unreadable as title/strong/caption text.
+  let accent-text = if dark { accent.lighten(45%) } else { accent }
+  // Tinted fills must flip direction with the palette: on dark paper the
+  // "subtle shade" variants come from darkening, not lightening.
+  let raw-fill = if dark { ink.darken(72%) } else { ink.lighten(94%) }
+  let quote-fill = if dark { accent.darken(64%) } else { accent.lighten(93%) }
+  let table-line = if dark { ink.darken(62%) } else { ink.lighten(72%) }
 
   // Frontmatter can contain anything ("4:3", "16/9", "banana"); touying
   // asserts on malformed ratios, so validate and fall back to 16-9.
   let ar-s = str(aspect-ratio).trim()
-  let ar-ok = ar-s.matches(regex("^[0-9]+(\\.[0-9]+)?-[0-9]+(\\.[0-9]+)?$")).len() > 0
+  let ar-ok = (
+    ar-s.matches(regex("^[0-9]+(\\.[0-9]+)?-[0-9]+(\\.[0-9]+)?$")).len() > 0
+  )
   if not ar-ok { ar-s = "16-9" }
 
-  set text(size: _base-size, font: bfonts, lang: lang, fill: _ink)
+  set text(size: _base-size, font: bfonts, lang: lang, fill: ink)
   set par(justify: true, leading: 0.65em)
   set list(
-    marker: text(fill: accent)[▪],
+    marker: text(fill: accent-text)[▪],
     indent: 0.6em,
     body-indent: 1em,
     spacing: 0.6em,
   )
   set enum(spacing: 0.6em)
   set strong(delta: 300)
-  show strong: it => text(fill: accent, it.body)
-  show link: it => text(fill: accent.darken(10%), it)
+  show strong: it => text(fill: accent-text, it.body)
+  show link: it => text(
+    fill: if dark { accent-text } else { accent.darken(10%) },
+    it,
+  )
   show raw.where(block: true): block.with(
-    fill: _ink.lighten(94%),
+    fill: raw-fill,
     inset: 0.8em,
     radius: 4pt,
     width: 100%,
   )
   show raw.where(block: false): box.with(
-    fill: _ink.lighten(94%),
+    fill: raw-fill,
     inset: (x: 0.2em, y: 0.1em),
     radius: 3pt,
   )
 
   show quote: it => block(
     width: 100%,
-    fill: accent.lighten(93%),
+    fill: quote-fill,
     stroke: (left: 2.6pt + accent),
     radius: (right: 4pt),
     inset: (x: 1em, y: 0.75em),
@@ -637,21 +700,21 @@
     #if it.at("attribution", default: none) != none [
       #v(0.3em)
       #set align(right)
-      #text(size: 0.8em, style: "normal", fill: _soft)[— #it.attribution]
+      #text(size: 0.8em, style: "normal", fill: soft)[— #it.attribution]
     ]
   ]
 
   show table.cell.where(y: 0): set text(
     weight: "bold",
-    fill: accent,
+    fill: accent-text,
     size: 0.85em,
   )
-  set table(stroke: 0.7pt + _ink.lighten(72%))
+  set table(stroke: 0.7pt + table-line)
 
   show: touying-slides.with(
     config-page(
       ..utils.page-args-from-aspect-ratio(ar-s),
-      fill: _paper,
+      fill: paper,
       // Fallback for slides without their own margin: fit the tallest
       // (bar-bearing) footer under the content box.
       margin: (top: 5.2em, bottom: _bottom-margin(true), x: 2.5em),
@@ -659,10 +722,14 @@
     config-colors(primary: accent),
     config-store(
       accent: accent,
+      accent-text: accent-text,
       hfonts: hfonts,
       bfonts: bfonts,
       footer: footer-t,
       progress-bar: show-bar,
+      ink: ink,
+      soft: soft,
+      dark: dark,
     ),
     ..args,
   )

@@ -7,6 +7,8 @@
 //   toc (false hides the outline slide that otherwise follows the title),
 //   progress-bar (true shows the footer progress bar on content slides;
 //     section dividers always have it; default: hidden on content slides),
+//   dark_theme (true -> dark palette; accent color stays the same;
+//     default: light/white theme),
 //   aspect-ratio ("16-9"; anything not W-H shaped falls back to 16-9),
 //   lang (BCP-47, defaults to "ru"; drives hyphenation/quotes).
 // Missing values fall back to safe defaults inside slides-theme.typ;
@@ -25,6 +27,7 @@
 #let _cover-raw = "$if(cover-image)$$cover-image$$endif$"
 #let _aspect-raw = "$if(aspect-ratio)$$aspect-ratio$$else$16-9$endif$"
 #let _progress-raw = "$if(progress-bar)$$progress-bar$$endif$"
+#let _dark-raw = "$if(dark_theme)$$dark_theme$$endif$"
 
 #show: slides-theme.with(
   aspect-ratio: _aspect-raw,
@@ -32,6 +35,7 @@
   title-font: _title-font-raw,
   body-font: _body-font-raw,
   progress-bar: _progress-raw,
+  dark-theme: _dark-raw,
   $if(lang)$lang: "$lang$",$endif$
   // Only set info fields that are actually present: passing empty content to
   // touying's config-info would make markup-text() return none and crash

@@ -5,6 +5,7 @@ author: Степан Ахвен
 date: 2026
 accent-color: "#2c3e50"
 title-font: "Oswald"
+dark_theme: true
 cover-image: "assets/cover.jpg"
 ---
 
