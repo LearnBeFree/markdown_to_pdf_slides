@@ -66,7 +66,50 @@ TYP_DIR="$(dirname "$TYP")"
 if [ "$TYP_DIR" != "$SCRIPT_DIR" ]; then
   cp "$SCRIPT_DIR/slides-theme.typ" "$TYP_DIR/"
 fi
-trap 'rm -rf "$WORK_DIR"' EXIT
+
+# --- frontmatter extraction -------------------------------------------------
+# Pandoc's yaml_metadata_block extension treats ANY `---`-delimited block as
+# YAML metadata — not just the leading frontmatter. A slide separator
+# followed by text that happens to parse as YAML therefore either aborts the
+# build ("could not find expected ':'") or silently swallows the slide text
+# into metadata. Fix: lift the leading frontmatter out here (same rules
+# pandoc applies: opening `---` on the very first line, not followed by a
+# blank line, closed by the first `---`/`...` at column 0) and disable the
+# extension in the pandoc call below — after that `---` can only ever mean
+# a slide break.
+#
+# The body copy must live NEXT TO THE SOURCE: the Lua filter resolves
+# relative image paths against the directory of its input file, so a temp
+# elsewhere (e.g. $WORK_DIR in /tmp) would break deck-relative images.
+DECK_MD="$(mktemp "$SRC_DIR/.slides-deck.XXXXXX")"
+FM_FILE="$WORK_DIR/frontmatter.yaml"
+awk -v fmfile="$FM_FILE" '
+  BEGIN { infm = 0; closed = 0; n = 0 }
+  NR == 1 && /^---[ \t]*$/ {
+    if ((getline nxt) <= 0) { print; next }                  # file is just `---`
+    if (nxt ~ /^(---|\.\.\.)[ \t]*$/) { closed = 1; next }   # empty frontmatter
+    if (nxt ~ /^[ \t]*$/) { print; print nxt; next }         # blank after opener: a plain rule
+    fm[n++] = nxt
+    infm = 1
+    next
+  }
+  infm {
+    if ($0 ~ /^(---|\.\.\.)[ \t]*$/) { infm = 0; closed = 1; next }
+    fm[n++] = $0
+    next
+  }
+  { print }
+  END {
+    if (closed) { for (i = 0; i < n; i++) print fm[i] > fmfile }
+    else        { for (i = 0; i < n; i++) print fm[i] }      # never closed: body text
+  }
+' "$SRC_ABS" > "$DECK_MD"
+FM_ARGS=()
+if [ -s "$FM_FILE" ]; then
+  FM_ARGS=(--metadata-file "$FM_FILE")
+fi
+
+trap 'rm -rf "$WORK_DIR" "$DECK_MD"' EXIT
 
 FONT_ARGS=()
 if [ -d "$SCRIPT_DIR/fonts" ]; then
@@ -110,17 +153,23 @@ if [ -s "$WORK_DIR/missing.txt" ]; then
 fi
 
 # Extension tweaks:
-#   -raw_tex                      keep `\word` sequences as literal text
-#                                 instead of silently dropping raw TeX
-#   +wikilinks_title_after_pipe   Obsidian `![[pic.png]]` embeds become real
-#                                 images the filter can lay out
-pandoc "$SRC_ABS" \
+#   -yaml_metadata_block               `---` is ALWAYS a slide separator:
+#                                     pandoc would otherwise also read
+#                                     mid-document `---` blocks as YAML
+#                                     metadata (frontmatter travels via
+#                                     --metadata-file instead)
+#   -raw_tex                           keep `\word` sequences as literal text
+#                                     instead of silently dropping raw TeX
+#   +wikilinks_title_after_pipe        Obsidian `![[pic.png]]` embeds become
+#                                     real images the filter can lay out
+pandoc "$DECK_MD" \
   "${MISSING_ARGS[@]}" \
-  --from markdown-raw_tex+wikilinks_title_after_pipe \
+  --from "markdown-yaml_metadata_block-raw_tex+wikilinks_title_after_pipe" \
   --to typst \
   --standalone \
   --template "$SCRIPT_DIR/template.typ" \
   --lua-filter "$SCRIPT_DIR/theme-filters.lua" \
+  "${FM_ARGS[@]}" \
   --output "$TYP"
 
 # The filter emits root-relative image paths and the staged .typ sits next
