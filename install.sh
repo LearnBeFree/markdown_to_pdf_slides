@@ -16,7 +16,17 @@ if [ -d "$HOME/bin" ] && ! [ -d "$HOME/.local/bin" ]; then
 fi
 mkdir -p "$BIN_DIR"
 
-printf '#!/usr/bin/env bash\nexec "%s/slides" "$@"\n' "$SCRIPT_DIR" > "$BIN_DIR/slides"
+cat > "$BIN_DIR/slides" <<EOF
+#!/usr/bin/env bash
+TARGET="$SCRIPT_DIR/slides"
+if [ ! -f "\$TARGET" ]; then
+  echo "слайды: обёртка указывает на \$TARGET, которого нет." >&2
+  echo "Похоже, каталог проекта был перемещён или удалён." >&2
+  echo "Переустановите: git clone <репозиторий> && cd slides_generator && ./install.sh" >&2
+  exit 1
+fi
+exec "\$TARGET" "\$@"
+EOF
 chmod +x "$BIN_DIR/slides"
 
 case ":$PATH:" in

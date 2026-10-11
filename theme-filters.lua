@@ -1,8 +1,13 @@
 -- theme-filters.lua — Pandoc AST -> Typst slide calls for slides-theme.typ.
 --
 -- Markdown semantics (the user controls slide breaks):
---   #  H1   -> #section-slide[Name]                       (divider slide)
+--   #  H1   -> #section-slide[Name]                       (divider slide;
+--              image paragraphs directly under the H1 become its
+--              full-bleed background, like the title-slide cover)
 --   ## H2  -> #content-slide(title: [...], ...)           (new slide)
+--              ...UNLESS the slide has no text: an empty H2 becomes a
+--              #focus-slide[Title] (statement slide), and an H2 followed
+--              only by images becomes a focus slide with a background
 --   ---    -> split: a new #content-slide with the SAME   (no marker)
 --              title and section as the current one
 --   ### H3+ -> bold paragraph inside the current slide
@@ -13,11 +18,20 @@
 --              aborts the build with an error pointing at that block)
 --
 -- Everything else (paragraphs, lists, tables, quotes, inline images) becomes
--- slide body text. Missing/unreadable images degrade to a dashed placeholder
--- box plus a stderr warning instead of a compile error. Image paths are
--- resolved to ABSOLUTE filesystem paths (relative to the source .md, its
--- percent-decoded form, or the working directory), so the generated .typ can
--- live anywhere as long as typst runs with `--root /` (see build.sh).
+-- slide body text.
+--
+-- IMAGES: this filter does NO filesystem I/O. build.sh probes the AST
+-- (image-probe.lua), resolves every reference with bash (Unicode-safe on
+-- Windows, unlike Lua io.open), sniffs the real format from magic bytes and
+-- delivers the results via --metadata argv (the one Unicode-safe channel
+-- into native pandoc):
+--   image-map:      records "src \30 typst-path \30 format" joined with \31
+--   missing-images: records "src \30 reason" joined with \31
+-- (Lua escapes are DECIMAL: \30 = record separator, \31 = unit separator —
+-- matching bash's octal $'\036' / $'\037'. Control characters cannot occur
+-- in filenames, so the encoding is unambiguous.) Missing/unreadable images degrade to a dashed placeholder
+-- box plus a stderr warning instead of a compile error; the explicit
+-- `format:` argument makes extensions (missing or lying) irrelevant.
 
 local function esc_str(s)
   return (s:gsub('[\\"]', '\\%0'))
@@ -29,140 +43,46 @@ local function meta_raw_typst(s)
   return pandoc.MetaInlines({ pandoc.RawInline("typst", s) })
 end
 
-local function percent_decode(s)
-  return (s:gsub("%%(%x%x)", function(h) return string.char(tonumber(h, 16)) end))
-end
+local IMAGE_MAP = {}   -- src -> { path = "...", format = "png|jpg|..." }
+local IMAGE_MISS = {}  -- src -> reason string
 
-local function input_dir()
-  local base = PANDOC_STATE.input_files[1]
-  if base then
-    local dir = base:match("^(.*)[/\\]")
-    if dir and dir ~= "" then return dir end
-  end
-  return "."
-end
-
--- True only for readable non-empty regular files: io.open also succeeds on
--- directories (Linux), and a 0-byte file would crash typst's image decoder.
-local function sniff_image(f)
-  -- typst picks its decoder by file EXTENSION, so a wrong or unknown format
-  -- would abort the whole build; sniff magic bytes instead and degrade.
-  f:seek("set")
-  local head = f:read(16) or ""
-  if head:sub(1, 3) == "\255\216\255" then return "jpg" end
-  if head:sub(1, 8) == "\137PNG\r\n\26\n" then return "png" end
-  if head:sub(1, 6) == "GIF87a" or head:sub(1, 6) == "GIF89a" then return "gif" end
-  if head:sub(1, 4) == "RIFF" and head:sub(9, 12) == "WEBP" then return "webp" end
-  if head:match("^%s*<%?xml") or head:match("^%s*<svg") then return "svg" end
-  return nil
-end
-
-local function is_abs(p)
-  return p:sub(1, 1) == "/" or p:sub(1, 1) == "\\" or p:match("^[A-Za-z]:[/\\]") ~= nil
-end
-
--- Typst paths inside a source file are VIRTUAL ("/x/y", resolved against
--- the compile root). A Windows drive-absolute path ("E:/x") is rejected by
--- typst ("path contains invalid component E:"), so strip the deck's drive
--- prefix (the build scripts set --root to exactly that drive). Existence
--- checks above still use the real "E:/x" form; only the EMITTED path is
--- converted. POSIX paths pass through unchanged.
-local function input_drive()
-  local base = PANDOC_STATE.input_files[1] or ""
-  return base:match("^([A-Za-z]:)[/\\]")
-end
-
-local function to_typst_path(p)
-  local drv = input_drive()
-  if drv then
-    if p:sub(1, 2):lower() == drv:lower() then
-      local rest = (p:sub(3):gsub("\\", "/"))
-      if rest:sub(1, 1) == "/" then return rest end
-      return "/" .. rest
-    end
-    if p:match("^[A-Za-z]:") then
-      return nil, "on drive " .. p:sub(1, 2) .. " while the deck is on " .. drv
-        .. " (typst allows a single root per compile)"
-    end
-  end
-  return p
-end
-
--- Native Lua on Windows opens files through the ANSI code page, so any
--- path with non-ASCII characters (UTF-8 Cyrillic, etc.) fails io.open even
--- when the file exists — the existence check itself is broken there.
--- typst handles Unicode paths natively, so in that case we emit the
--- constructed path UNVERIFIED and let typst be the judge (it reports a
--- clear "file not found" for genuinely broken references).
-local ON_WINDOWS = package.config:sub(1, 1) == "\\"
-
-local function unverifiable_on_windows(p)
-  return ON_WINDOWS and p:find("[\128-\255]", 1) ~= nil
-end
-
--- build.sh pre-checks every image reference with bash (which handles
--- Unicode paths natively on Windows) and passes the MISSING ones to us via
--- --metadata on the command line — argv being the one channel that carries
--- Unicode safely into native pandoc. This lets the trust branch below keep
--- producing friendly placeholders for genuinely missing files instead of
--- failing later in typst.
-local MISSING_REFS = {}
-
-local function remember_missing(joined)
-  for ref in joined:gmatch("[^\31]+") do
-    MISSING_REFS[ref] = true
+local function split_records(joined, fn)
+  for rec in joined:gmatch("[^\31]+") do
+    local a, b, c = rec:match("^([^\30]*)\30([^\30]*)\30?([^\30]*)")
+    fn(a, b, c)
   end
 end
 
--- Resolve an image reference to an absolute, forward-slashed path that typst
--- can load. Returns nil + reason when nothing matches, the file is not an
--- image, or its extension does not fit the actual content.
-local function resolve_media(src)
-  if not src or src == "" then return nil, "empty path" end
-  local dir = input_dir()
-  local cwd = pandoc.system.get_working_directory()
-  local cands = {}
-  local variants = { src }
-  local dec = percent_decode(src)
-  if dec ~= src then variants[#variants + 1] = dec end
-  for _, v in ipairs(variants) do
-    if is_abs(v) then
-      cands[#cands + 1] = v
-    else
-      cands[#cands + 1] = dir .. "/" .. v
-      cands[#cands + 1] = cwd .. "/" .. v
-    end
-  end
-  for _, p in ipairs(cands) do
-    local f = io.open(p, "rb")
-    if f then
-      local ok, size = pcall(function() return f:seek("end") end)
-      if ok and size ~= nil and size > 0 then
-        local kind = sniff_image(f)
-        f:close()
-        if kind == nil then
-          return nil, "not an image (supported: png, jpg/jpeg, gif, webp, svg): " .. p
-        end
-        local e = (p:match("%.(%w+)%s*$") or ""):lower()
-        local ext_ok = e == kind or (kind == "jpg" and e == "jpeg")
-        if not ext_ok then
-          return nil, "extension ." .. e .. " does not match detected " .. kind
-            .. " content (typst decodes by extension): " .. p
-        end
-        local tp, terr = to_typst_path((p:gsub("\\", "/")))
-        if tp then return tp end
-        return nil, terr
+-- must run BEFORE any image lookup (feeds the map from build.sh's probe)
+local function ingest_manifest(meta)
+  local m = meta["image-map"]
+  if m then
+    split_records(pandoc.utils.stringify(m), function(src, path, fmt)
+      if src ~= "" and path ~= "" then
+        IMAGE_MAP[src] = { path = path, format = (fmt ~= "" and fmt or nil) }
       end
-      f:close()
-    elseif unverifiable_on_windows(p) then
-      -- bash pre-checked this ref: listed as missing -> placeholder
-      if MISSING_REFS[src] then return nil, "not found" end
-      local tp, terr = to_typst_path((p:gsub("\\", "/")))
-      if tp then return tp end
-      return nil, terr
-    end
+    end)
+    meta["image-map"] = nil
   end
-  return nil, "not found"
+  m = meta["missing-images"]
+  if m then
+    split_records(pandoc.utils.stringify(m), function(src, why)
+      if src ~= "" then IMAGE_MISS[src] = (why ~= "" and why or "не найден") end
+    end)
+    meta["missing-images"] = nil
+  end
+end
+
+local function lookup_image(src)
+  if not src or src == "" then return nil, "пустой путь" end
+  local hit = IMAGE_MAP[src]
+  if hit then return hit end
+  return nil, IMAGE_MISS[src] or "не найден"
+end
+
+local function image_code(hit)
+  local f = hit.format and (', format: "' .. hit.format .. '"') or ""
+  return '#image("' .. esc_str(hit.path) .. '"' .. f .. ')'
 end
 
 local function placeholder_box(label)
@@ -176,12 +96,14 @@ local function placeholder_box(label)
 end
 
 local function image_to_raw(img)
-  local p, err = resolve_media(img.src or "")
-  if not p then
-    io.stderr:write("WARNING: skipping image ", img.src or "", " (", err, ")\n")
-    return pandoc.RawInline("typst", placeholder_box("нет изображения: " .. (img.src or "")))
+  local hit, why = lookup_image(img.src or "")
+  if not hit then
+    io.stderr:write("slides: ВНИМАНИЕ: картинка ", img.src or "",
+      " — ", why, " — поставлена заглушка\n")
+    return pandoc.RawInline("typst",
+      placeholder_box("нет изображения: " .. (img.src or "")))
   end
-  return pandoc.RawInline("typst", '#image("' .. esc_str(p) .. '")')
+  return pandoc.RawInline("typst", image_code(hit))
 end
 
 local function write_block(b)
@@ -253,40 +175,43 @@ local function as_image_tiles(b)
   end
   return tiles
 end
+
 function Pandoc(doc)
 
   local meta = doc.meta
-
-  -- must run BEFORE any resolve_media call (it feeds the Windows trust
-  -- branch with bash's Unicode-safe existence check)
-  do
-    local m = meta["missing-images"]
-    if m then remember_missing(pandoc.utils.stringify(m)) end
-    meta["missing-images"] = nil
-  end
+  ingest_manifest(meta)
 
   local cover = meta["cover-image"]
   if cover then
-    local p = pandoc.utils.stringify(cover)
-    local r, err = resolve_media(p)
-    if p ~= "" and not r then
-      io.stderr:write("WARNING: cover-image ", err, " — using light title slide\n")
+    local src = pandoc.utils.stringify(cover)
+    if src == "" then
       meta["cover-image"] = nil
-    elseif r then
-      -- absolute path so the cover also loads when the .typ lives elsewhere
-      meta["cover-image"] = meta_raw_typst(esc_str(r))
+    else
+      local hit, why = lookup_image(src)
+      if not hit then
+        io.stderr:write("slides: ВНИМАНИЕ: cover-image ", src,
+          " — ", why, " — титульный слайд без обложки\n")
+        meta["cover-image"] = nil
+      else
+        -- absolute typst-virtual path so the cover also loads when the .typ
+        -- lives elsewhere; format travels in cover-format (see template.typ)
+        meta["cover-image"] = meta_raw_typst(esc_str(hit.path))
+        if hit.format then meta["cover-format"] = meta_raw_typst(hit.format) end
+      end
     end
   end
-
-  -- build.sh copies slides-theme.typ next to the generated .typ, so the
-  -- template imports it as a sibling file: no THEME_DIR env var (it mangles
-  -- non-ASCII paths on Windows) and no absolute theme paths in the source.
 
   local out = {}
   local section, title = nil, nil
   local body_blocks, images = {}, {}
   local emitted_for_title = false
   local toc_entries = {}
+
+  -- Pending H1 divider: emitted only once we know whether images follow it
+  -- directly (they become the divider background). `after_h1` is true while
+  -- only image-only paragraphs have been seen since the H1.
+  local pending_section = nil
+  local after_h1 = false
 
   -- Frontmatter flag: `toc: false` hides the outline slide that otherwise
   -- follows the deck title. Anything else (or absent) keeps it visible.
@@ -297,6 +222,27 @@ function Pandoc(doc)
     if v == "false" or v == "no" or v == "off" then show_toc = false end
   end
 
+  local function image_dict(im)
+    local hit, why = lookup_image(im.path)
+    if not hit then return nil, why end
+    local d = '(path: "' .. esc_str(hit.path) .. '"'
+      .. ', format: "' .. (hit.format or "") .. '"'
+    if im.caption then d = d .. ", caption: [" .. im.caption .. "]" end
+    return d .. "), "
+  end
+
+  -- named args for statement-slide backgrounds; typst call syntax puts
+  -- args before the content block: #section-slide(args)[Name]
+  local function bg_args(path)
+    local hit, why = lookup_image(path)
+    if not hit then return nil, why end
+    local args = 'background-image: "' .. esc_str(hit.path) .. '"'
+    if hit.format then
+      args = args .. ', background-format: "' .. hit.format .. '"'
+    end
+    return args
+  end
+
   local function emit_content(include_images)
     local chunks = { "#content-slide(" }
     if title ~= nil then chunks[#chunks + 1] = "  title: [" .. title .. "]," end
@@ -304,11 +250,10 @@ function Pandoc(doc)
     if include_images and #images > 0 then
       local ims = {}
       for _, im in ipairs(images) do
-        local d = '(path: "' .. esc_str(im.path) .. '"'
-        if im.caption then d = d .. ", caption: [" .. im.caption .. "]" end
-        ims[#ims + 1] = d .. "), "
+        local d = image_dict(im)
+        if d then ims[#ims + 1] = d end
       end
-      chunks[#chunks + 1] = "  images: (" .. table.concat(ims) .. "),"
+      if #ims > 0 then chunks[#chunks + 1] = "  images: (" .. table.concat(ims) .. ")," end
     end
     if #body_blocks > 0 then
       chunks[#chunks + 1] = "  body: [\n" .. ser_blocks_list(body_blocks) .. "\n  ],"
@@ -320,17 +265,73 @@ function Pandoc(doc)
   local function emit_gallery()
     local ims = {}
     for _, im in ipairs(images) do
-      local d = '(path: "' .. esc_str(im.path) .. '"'
-      if im.caption then d = d .. ", caption: [" .. im.caption .. "]" end
-      ims[#ims + 1] = d .. "), "
+      local d = image_dict(im)
+      if d then ims[#ims + 1] = d end
     end
     out[#out + 1] = "#gallery-slide(\n  (" .. table.concat(ims) .. "),\n)"
+  end
+
+  -- Statement slide: big text on an accent (or background-image) slide.
+  local function emit_focus(bg_path)
+    if bg_path then
+      local a, why = bg_args(bg_path)
+      if a then
+        out[#out + 1] = "#focus-slide(" .. a .. ")[" .. title .. "]"
+        return
+      end
+      io.stderr:write("slides: ВНИМАНИЕ: картинка ", bg_path,
+        " — ", why, " — фон слайда не установлен\n")
+    end
+    out[#out + 1] = "#focus-slide[" .. title .. "]"
+  end
+
+  -- The pending H1 divider: emitted deferred, once we know whether image
+  -- paragraphs follow it directly (they become its background).
+  local function finalize_section()
+    if not pending_section then return end
+    local a
+    if pending_section.bg then
+      a = bg_args(pending_section.bg)
+      if not a then
+        local _, why = lookup_image(pending_section.bg)
+        io.stderr:write("slides: ВНИМАНИЕ: картинка ", pending_section.bg,
+          " — ", why, " — фон разделителя не установлен\n")
+      end
+    end
+    if a then
+      out[#out + 1] = "#section-slide(" .. a .. ")[" .. pending_section.name .. "]"
+    else
+      out[#out + 1] = "#section-slide[" .. pending_section.name .. "]"
+    end
+    toc_entries[#toc_entries + 1] = { level = 1, text = pending_section.name }
+    if #pending_section.extra > 0 then
+      local ims = {}
+      for _, im in ipairs(pending_section.extra) do
+        local d = image_dict(im)
+        if d then ims[#ims + 1] = d end
+      end
+      if #ims > 0 then
+        out[#out + 1] = "#gallery-slide(\n  (" .. table.concat(ims) .. "),\n)"
+      end
+    end
+    pending_section = nil
   end
 
   local function flush(force)
     local has_content = #body_blocks > 0 or #images > 0
     if not has_content and not (force and title ~= nil and not emitted_for_title) then
       body_blocks, images = {}, {}
+      return
+    end
+    -- Statement slide: an H2 whose slide has no text (nothing at all, or
+    -- images only) becomes a focus slide; a lone image is its background.
+    if title ~= nil and not emitted_for_title and #body_blocks == 0 then
+      local bg = nil
+      if #images >= 1 then bg = table.remove(images, 1) end
+      emit_focus(bg and bg.path or nil)
+      if #images > 0 then emit_gallery() end
+      body_blocks, images = {}, {}
+      emitted_for_title = true
       return
     end
     if #images >= 2 then
@@ -349,21 +350,27 @@ function Pandoc(doc)
     if b.t == "Header" then
       if b.level == 1 then
         flush(true)
+        finalize_section()
         local name = ser_inlines(b.content)
-        out[#out + 1] = "#section-slide[" .. name .. "]"
-        toc_entries[#toc_entries + 1] = { level = 1, text = name }
+        pending_section = { name = name, bg = nil, extra = {} }
+        after_h1 = true
         section, title = name, nil
       elseif b.level == 2 then
         flush(true)
+        finalize_section()
+        after_h1 = false
         title = ser_inlines(b.content)
         toc_entries[#toc_entries + 1] = { level = 2, text = title }
         emitted_for_title = false
       else
+        after_h1 = false
         body_blocks[#body_blocks + 1] = pandoc.Para(pandoc.Strong(b.content))
       end
     elseif b.t == "HorizontalRule" then
+      if after_h1 then finalize_section(); after_h1 = false end
       flush(false)
     elseif b.t == "RawBlock" and b.format == "typst" then
+      if after_h1 then finalize_section(); after_h1 = false end
       flush(false)
       out[#out + 1] = b.text
       -- the raw block acts as this slide's content: don't emit a phantom
@@ -371,23 +378,42 @@ function Pandoc(doc)
       if title ~= nil then emitted_for_title = true end
     else
       local tiles = as_image_tiles(b)
-      if #tiles > 0 then
+      if #tiles > 0 and after_h1 then
+        -- image paragraphs directly under the H1: divider background(s)
         for _, tile in ipairs(tiles) do
-          local p, err = resolve_media(tile.path)
-          if p then
-            images[#images + 1] = { path = p, caption = tile.caption }
+          local hit, why = lookup_image(tile.path)
+          if hit then
+            if not pending_section.bg then
+              pending_section.bg = tile.path
+            else
+              pending_section.extra[#pending_section.extra + 1] = tile
+            end
           else
-            io.stderr:write("WARNING: skipping image ", tile.path, " (", err, ")\n")
+            io.stderr:write("slides: ВНИМАНИЕ: картинка ", tile.path,
+              " — ", why, " — фон разделителя не установлен\n")
+          end
+        end
+      elseif #tiles > 0 then
+        for _, tile in ipairs(tiles) do
+          local hit, why = lookup_image(tile.path)
+          if hit then
+            images[#images + 1] = { path = tile.path, caption = tile.caption }
+          else
+            io.stderr:write("slides: ВНИМАНИЕ: картинка ", tile.path,
+              " — ", why, " — поставлена заглушка\n")
             body_blocks[#body_blocks + 1] =
-              pandoc.Plain(pandoc.RawInline("typst", placeholder_box("нет изображения: " .. tile.path)))
+              pandoc.Plain(pandoc.RawInline("typst",
+                placeholder_box("нет изображения: " .. tile.path)))
           end
         end
       else
+        if after_h1 then finalize_section(); after_h1 = false end
         body_blocks[#body_blocks + 1] = b
       end
     end
   end
   flush(true)
+  finalize_section()
 
   if show_toc and #toc_entries > 0 then
     local es = {}

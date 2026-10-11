@@ -3,6 +3,7 @@
 #
 #   slides build <deck.md> [out.pdf|out-dir]   разовая сборка
 #   slides watch <deck.md> [out.pdf|out-dir]   авто-пересборка при изменениях
+#   slides doctor                             проверить окружение
 #   slides help
 #
 # Проверяет зависимости (pandoc, typst) и подсказывает, как их поставить.
@@ -11,7 +12,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
-  sed -n '2,8p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '2,9p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 install_hint() {
@@ -53,6 +54,70 @@ check_deps() {
   fi
 }
 
+doctor() {
+  local ok=0 bad=0 pv tv sample pages
+  echo "── slides doctor: проверка окружения ──────────────"
+  if command -v pandoc >/dev/null 2>&1; then
+    pv="$(pandoc --version | head -1 | awk '{print $2}')"
+    case "$pv" in
+      3.*) echo "  ok    pandoc $pv" ;;
+      *)   echo "  WARN  pandoc $pv — тестировалось с 3.x"; bad=$((bad+1)) ;;
+    esac
+  else
+    echo "  FAIL  pandoc не установлен"; bad=$((bad+1))
+  fi
+  if command -v typst >/dev/null 2>&1; then
+    tv="$(typst --version | awk '{print $2}')"
+    case "$tv" in
+      0.14.*|0.15.*) echo "  ok    typst $tv" ;;
+      *)   echo "  WARN  typst $tv — тестировалось с 0.14–0.15"; bad=$((bad+1)) ;;
+    esac
+  else
+    echo "  FAIL  typst не установлен"; bad=$((bad+1))
+  fi
+  if [ -d "$SCRIPT_DIR/fonts" ] && command -v typst >/dev/null 2>&1; then
+    local avail f
+    avail="$(typst fonts --font-path "$SCRIPT_DIR/fonts" 2>/dev/null || true)"
+    if [ -z "$avail" ]; then
+      echo "  WARN  не удалось получить список шрифтов (typst fonts)"
+    else
+      for f in Oswald Philosopher; do
+        if printf '%s\n' "$avail" | grep -qixF "$f"; then
+          echo "  ok    шрифт $f (fonts/)"
+        else
+          echo "  WARN  шрифт $f не виден typst — проверьте каталог fonts/"; bad=$((bad+1))
+        fi
+      done
+    fi
+  fi
+  if git -C "$SCRIPT_DIR" rev-parse --git-dir >/dev/null 2>&1; then
+    if git -C "$SCRIPT_DIR" remote get-url origin >/dev/null 2>&1; then
+      echo "  ok    git remote origin (авто-обновление в watch)"
+    else
+      echo "  note  git remote 'origin' не настроен — watch не будет проверять обновления"
+    fi
+  fi
+  echo "── тестовая сборка example.md ─────────────────────"
+  sample="$(mktemp -d)"
+  cp "$SCRIPT_DIR/example.md" "$sample/" 2>/dev/null || true
+  cp -r "$SCRIPT_DIR/assets" "$sample/" 2>/dev/null || true
+  if [ ! -f "$sample/example.md" ]; then
+    echo "  note  example.md не найден — пропускаю"
+  elif "$SCRIPT_DIR/build.sh" "$sample/example.md" >/dev/null 2>"$sample/err"; then
+    pages="$(pdfinfo "$sample/example.pdf" 2>/dev/null | awk '/^Pages/{print $2}')"
+    echo "  ok    собралось${pages:+ ($pages стр.)}"
+  else
+    echo "  FAIL  сборка не удалась:"; sed 's/^/    /' "$sample/err" | head -20
+    bad=$((bad+1))
+  fi
+  rm -rf "$sample"
+  if [ "$bad" -gt 0 ]; then
+    echo "── итог: найдено проблем: $bad ──"
+    exit 1
+  fi
+  echo "── итог: всё в порядке ──"
+}
+
 case "${1:-help}" in
   build)
     shift
@@ -63,6 +128,9 @@ case "${1:-help}" in
     shift
     check_deps
     exec "$SCRIPT_DIR/watch.sh" "$@"
+    ;;
+  doctor)
+    doctor
     ;;
   help|-h|--help|'')
     usage

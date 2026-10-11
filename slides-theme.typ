@@ -41,20 +41,20 @@
 // box while the footer starts ~10pt below it (the _foot-clear gap); the
 // small lift nudges content toward the optical center between the two.
 #let _v-balance = 15pt
-#let _shrink-steps = range(
-  int(_base-size / 1pt),
-  int(_min-size / 1pt) - 1,
-  step: -1,
-).map(i => i * 1pt)
+// _shrink binary-searches font size from _base-size (20pt) down to
+// _min-size (14pt); see _shrink.
 
-// Footer geometry (measured on a 100dpi render; see _footer). The footer
-// stack [text row][gap][progress bar] is anchored page-wide so its bottom
-// sits ~11pt above the page edge. The bottom margin must keep the WHOLE
-// stack below the content box, otherwise bottom-flush image tiles render
-// under the footer text (the overlap bug this replaces).
+// Footer geometry. The footer stack [text row][gap][progress bar] is
+// anchored page-wide so its bottom sits ~11pt above the page edge. The
+// bottom margin must keep the WHOLE stack below the content box, otherwise
+// bottom-flush image tiles render under the footer text (the overlap bug
+// this replaces). The text-row height is derived from the footer font size
+// (0.5em at _base-size) with a 1.2 line-box factor — a safe upper bound
+// that auto-scales if sizes change (measure() is unavailable here: margins
+// resolve outside a document context).
 #let _foot-lift = 11pt // stack bottom above the page edge
-#let _foot-text-h = 9.5pt // 10pt footer text row (measured 9.36pt)
-#let _foot-gap = 10pt // text row -> progress bar (measured 10.08pt)
+#let _foot-text-h = _base-size * 0.5 * 1.2 // footer text row (0.5em * line-box)
+#let _foot-gap = 10pt // text row -> progress bar
 #let _foot-bar-h = 2.5pt
 #let _foot-clear = 10pt // breathing room between content box and footer
 
@@ -115,8 +115,15 @@
   _cstr(v).trim().replace("\\#", "#").replace("\\_", "_").replace("\\%", "%")
 }
 
-#let _img-ar(path) = {
-  let m = measure(image(path, width: 100pt))
+// image() wrapper: bash sniffs the REAL format from magic bytes (Lua
+// manifest passes it along), so file extensions — missing or lying — no
+// longer matter. Empty format falls back to typst's own detection.
+#let _img(p, fmt, ..args) = {
+  if fmt != none and fmt != "" { image(p, format: fmt, ..args) } else { image(p, ..args) }
+}
+
+#let _img-ar(path, fmt) = {
+  let m = measure(_img(path, fmt, width: 100pt))
   // 1.0/0.0 raises "cannot divide by zero" in Typst — guard degenerate files.
   m.width / calc.max(m.height, 1pt)
 }
@@ -130,8 +137,24 @@
     }))
     m.height <= height + 0.5pt
   }
-  let found = _shrink-steps.find(fits)
-  let chosen = if found != none { found } else { _min-size }
+  // Binary search over integer point sizes [min, base]: text height is
+  // monotone in font size, so 3-4 measures replace the old linear scan.
+  let lo = int(_min-size / 1pt)
+  let hi = int(_base-size / 1pt)
+  let chosen = _min-size
+  if fits(hi * 1pt) {
+    chosen = hi * 1pt
+  } else if lo < hi {
+    let a = lo
+    let b = hi - 1
+    if fits(a * 1pt) {
+      while a < b {
+        let mid = int((a + b + 1) / 2)
+        if fits(mid * 1pt) { a = mid } else { b = mid - 1 }
+      }
+      chosen = a * 1pt
+    }
+  }
   block(width: width, {
     set text(size: chosen)
     set par(leading: 0.65em, justify: true)
@@ -141,8 +164,9 @@
 
 #let _img-tile(self, im, width, height) = {
   let path = _clean-path(im.at("path", default: ""))
+  let fmt = im.at("format", default: "")
   let cap = im.at("caption", default: none)
-  let pic = image(path, width: 100%, height: 100%, fit: "contain")
+  let pic = _img(path, fmt, width: 100%, height: 100%, fit: "contain")
   block(width: width, height: height, {
     if cap != none {
       grid(
@@ -188,7 +212,10 @@
   } else if not has-text {
     align(center + horizon, _img-tile(self, images.at(0), W, H))
   } else {
-    let ar = _img-ar(_clean-path(images.at(0).at("path", default: "")))
+    let ar = _img-ar(
+      _clean-path(images.at(0).at("path", default: "")),
+      images.at(0).at("format", default: ""),
+    )
     if ar < 1.15 {
       let zw = calc.min(0.46 * W, H * ar)
       let tw = W - zw - g
@@ -233,7 +260,10 @@
   let H = size.height
   let n = images.len()
   let g = _gutter
-  let ars = images.map(im => _img-ar(_clean-path(im.at("path", default: ""))))
+  let ars = images.map(im => _img-ar(
+    _clean-path(im.at("path", default: "")),
+    im.at("format", default: ""),
+  ))
   let caps = images.map(im => im.at("caption", default: none))
 
   let cap-at(cap, wd) = if cap != none {
@@ -310,8 +340,9 @@
           columns: (iw,),
           rows: (rh, auto),
           row-gutter: 5pt,
-          align(center)[#image(
+          align(center)[#_img(
             _clean-path(im.at("path", default: "")),
+            im.at("format", default: ""),
             width: iw,
             height: rh,
             fit: "contain",
@@ -441,27 +472,65 @@
   )
 })
 
-#let section-slide(body) = touying-slide-wrapper(self => {
-  touying-slide(
-    self: self,
-    // No header here; symmetric top/bottom margins keep the title
-    // dead-center. Section dividers always show the progress bar, so
-    // both margins fit the taller footer.
-    config: config-page(
-      margin: (
-        top: _bottom-margin(true),
-        bottom: _bottom-margin(true),
-        x: 2.5em,
+#let _scrim() = rect(width: 100%, height: 100%, fill: rgb(0, 0, 0, 70%), stroke: none)
+
+// Full-bleed background + scrim + centered cream text, shared by the
+// cover title slide, background section dividers and background focus
+// slides. `inner` renders on top of the scrim.
+#let _bg-statement(self, bg, bg-format, inner) = {
+  box(width: 100%, height: 100%, {
+    box(width: 100%, height: 100%)[#_img(
+      _clean-path(bg),
+      bg-format,
+      width: 100%,
+      height: 100%,
+      fit: "cover",
+    )]
+    // Uniform 70% darkening so text of any weight stays readable.
+    place(top + left, _scrim())
+    place(center + horizon, inner)
+  })
+}
+
+#let section-slide(body, background-image: none, background-format: auto) = touying-slide-wrapper(self => {
+  if _has(background-image) {
+    // Background divider: same cover treatment as the title slide, but the
+    // footer + progress bar stay (a divider is still a navigable slide).
+    touying-slide(
+      self: self,
+      config: config-page(
+        margin: 0em,
+        header: none,
+        footer: _footer(self, true),
       ),
-      header: none,
-      footer: _footer(self, true),
-    ),
-    align(horizon, {
-      set text(font: self.store.hfonts, fill: self.store.accent-text)
-      set align(center)
-      text(size: 1.7em, weight: "bold", body)
-    }),
-  )
+      _bg-statement(self, background-image, background-format, {
+        set align(center)
+        set text(font: self.store.hfonts, fill: _cream)
+        text(size: 1.7em, weight: "bold", body)
+      }),
+    )
+  } else {
+    touying-slide(
+      self: self,
+      // No header here; symmetric top/bottom margins keep the title
+      // dead-center. Section dividers always show the progress bar, so
+      // both margins fit the taller footer.
+      config: config-page(
+        margin: (
+          top: _bottom-margin(true),
+          bottom: _bottom-margin(true),
+          x: 2.5em,
+        ),
+        header: none,
+        footer: _footer(self, true),
+      ),
+      align(horizon, {
+        set text(font: self.store.hfonts, fill: self.store.accent-text)
+        set align(center)
+        text(size: 1.7em, weight: "bold", body)
+      }),
+    )
+  }
 })
 
 // Outline after the deck title. entries: ((level: 1, text: [..]), ...) —
@@ -509,28 +578,45 @@
   )
 })
 
-#let focus-slide(body) = touying-slide-wrapper(self => {
-  touying-slide(
-    self: self,
-    config: utils.merge-dicts(
-      config-page(
-        fill: self.store.accent,
-        margin: 2em,
-        header: none,
-        footer: none,
-      ),
-      config-common(freeze-slide-counter: true),
-    ),
-    align(horizon + center, text(
-      size: 1.5em,
-      fill: _cream,
-      font: self.store.hfonts,
-      body,
-    )),
-  )
+// Statement slide: an empty H2 in markdown. Just the message — no header,
+// no footer, no progress bar. Background (optional) uses the same cover
+// treatment; without one the slide is filled with `focus-accent` (falls
+// back to the deck accent).
+// Light accents (a pale blue focus slide) would drown cream text: pick the
+// readable pair by grayscale luminance instead of assuming a dark accent.
+#let _on-accent(accent) = {
+  let lum = luma(accent).components().at(0)
+  if lum > 55% { _ink } else { _cream }
+}
+
+#let focus-slide(body, background-image: none, background-format: auto) = touying-slide-wrapper(self => {
+  let fill = self.store.at("focus-accent", default: none)
+  if fill == none { fill = self.store.accent }
+  if _has(background-image) {
+    touying-slide(
+      self: self,
+      config: config-page(margin: 0em, header: none, footer: none),
+      _bg-statement(self, background-image, background-format, {
+        set align(center)
+        set text(font: self.store.hfonts, fill: _cream)
+        text(size: 1.5em, weight: "bold", body)
+      }),
+    )
+  } else {
+    touying-slide(
+      self: self,
+      config: config-page(fill: fill, margin: 2em, header: none, footer: none),
+      align(horizon + center, text(
+        size: 1.5em,
+        fill: _on-accent(fill),
+        font: self.store.hfonts,
+        body,
+      )),
+    )
+  }
 })
 
-#let title-slide(cover-image: none) = touying-slide-wrapper(self => {
+#let title-slide(cover-image: none, cover-format: auto) = touying-slide-wrapper(self => {
   let info = self.info
   let meta-line = {
     let parts = ()
@@ -539,8 +625,23 @@
     if info.institution != none { parts.push(info.institution) }
     parts.join("  ·  ")
   }
+  // Vertical balance, exactly and without measurement: the group placed at
+  // center+horizon is [hidden copy of the below-part][title][below-part] —
+  // equal content above and below the title means the TITLE lands exactly
+  // on the page's vertical center (hide() keeps the counterweight's size).
   if _has(cover-image) {
     let cover = _clean-path(cover-image)
+    let below = {
+      set align(center)
+      set text(fill: _cream)
+      if info.subtitle != none {
+        text(size: 0.9em, info.subtitle)
+      }
+      if meta-line != "" {
+        v(0.9em)
+        text(size: 0.65em, fill: _cream.lighten(70%), meta-line)
+      }
+    }
     touying-slide(
       self: self,
       config: utils.merge-dicts(
@@ -548,53 +649,43 @@
         config-common(freeze-slide-counter: true),
       ),
       box(width: 100%, height: 100%, {
-        box(width: 100%, height: 100%)[#image(
-          cover,
-          width: 100%,
-          height: 100%,
-          fit: "cover",
-        )]
-        // Uniform 70% darkening across the whole cover image (verified:
-        // page luminance 134.5 -> 107.2 = x0.797 with the scrim).
-        place(top + left, rect(
-          width: 100%,
-          height: 100%,
-          fill: rgb(0, 0, 0, 70%),
-          stroke: none,
-        ))
-
+        box(width: 100%, height: 100%)[#_img(cover, cover-format, width: 100%, height: 100%, fit: "cover")]
+        // Uniform 70% darkening keeps any text weight readable.
+        place(top + left, _scrim())
         place(center + horizon, {
-          set align(center)
-          set text(fill: _cream)
+          hide({ v(0.7em); below })
           if info.title != none {
-            text(
-              size: 1.8em,
-              font: self.store.hfonts,
-              weight: "bold",
-              info.title,
-            )
+            set align(center)
+            text(size: 1.8em, font: self.store.hfonts, weight: "bold", fill: _cream, info.title)
           }
-          if info.subtitle != none {
-            v(0.4em)
-            text(size: 0.9em, info.subtitle)
-          }
-          if meta-line != "" {
-            v(0.9em)
-            text(size: 0.65em, fill: _cream.lighten(70%), meta-line)
-          }
+          v(0.7em)
+          below
         })
       }),
     )
   } else {
+    let below = {
+      set align(center)
+      line(length: 15%, stroke: 3pt + self.store.accent)
+      if info.subtitle != none {
+        v(0.8em)
+        text(size: 0.95em, fill: self.store.soft, info.subtitle)
+      }
+      if meta-line != "" {
+        v(1.4em)
+        text(size: 0.65em, fill: self.store.soft, meta-line)
+      }
+    }
     touying-slide(
       self: self,
       config: utils.merge-dicts(
         config-page(header: none, footer: none),
         config-common(freeze-slide-counter: true),
       ),
-      align(horizon + center, {
-        set align(center)
+      place(center + horizon, {
+        hide({ v(0.9em); below })
         if info.title != none {
+          set align(center)
           text(
             size: 1.8em,
             font: self.store.hfonts,
@@ -603,16 +694,8 @@
             info.title,
           )
         }
-        v(1em)
-        line(length: 15%, stroke: 3pt + self.store.accent)
-        if info.subtitle != none {
-          v(0.8em)
-          text(size: 0.95em, fill: self.store.soft, info.subtitle)
-        }
-        if meta-line != "" {
-          v(1.4em)
-          text(size: 0.65em, fill: self.store.soft, meta-line)
-        }
+        v(0.9em)
+        below
       }),
     )
   }
@@ -621,6 +704,7 @@
 #let slides-theme(
   aspect-ratio: "16-9",
   accent: auto,
+  focus-accent: auto,
   title-font: auto,
   body-font: auto,
   footer: auto,
@@ -631,6 +715,9 @@
   body,
 ) = {
   let accent = _resolve-color(accent, _accent-default)
+  // Second accent for focus slides; falls back to the main accent when
+  // absent or invalid.
+  let focus-accent = _resolve-color(focus-accent, none)
   let hfonts = _resolve-fonts(title-font, _display-fonts)
   let bfonts = _resolve-fonts(body-font, _body-fonts)
   let footer-t = if footer != auto and footer != none { footer } else { none }
@@ -722,6 +809,7 @@
     config-colors(primary: accent),
     config-store(
       accent: accent,
+      focus-accent: focus-accent,
       accent-text: accent-text,
       hfonts: hfonts,
       bfonts: bfonts,

@@ -169,23 +169,17 @@ signature() {
 }
 
 # ---- сборка -----------------------------------------------------------------
+# Выходной путь передаётся build.sh (он сам копирует PDF куда нужно).
 build_once() {
-  local t0 dt pages=""
+  local t0 dt pages="" out_arg=()
+  if [ "$OUT_ABS" != "$BUILT_PDF" ]; then out_arg=("$OUT_ABS"); fi
   t0=$(date +%s)
-  if "$SCRIPT_DIR/build.sh" "$SRC_ABS" >"$TMPLOG/out" 2>"$TMPLOG/err"; then
+  if "$SCRIPT_DIR/build.sh" "$SRC_ABS" ${out_arg[@]+"${out_arg[@]}"} \
+      >"$TMPLOG/out" 2>"$TMPLOG/err"; then
     dt=$(( $(date +%s) - t0 ))
     command -v pdfinfo >/dev/null 2>&1 \
-      && pages="$(pdfinfo "$BUILT_PDF" 2>/dev/null | awk '/^Pages/{print ", "$2" стр."}')"
-    if [ "$OUT_ABS" != "$BUILT_PDF" ]; then
-      mkdir -p "$(dirname "$OUT_ABS")" 2>/dev/null || true
-      if cp "$BUILT_PDF" "$OUT_ABS" 2>/dev/null; then
-        ok "успешно собрано (${dt}с${pages}) → $OUT_ABS"
-      else
-        err "сборка ок, но не удалось скопировать в $OUT_ABS"
-      fi
-    else
-      ok "успешно собрано (${dt}с${pages}) → $OUT_ABS"
-    fi
+      && pages="$(pdfinfo "$OUT_ABS" 2>/dev/null | awk '/^Pages/{print ", "$2" стр."}')"
+    ok "успешно собрано (${dt}с${pages}) → $OUT_ABS"
   else
     err "сборка не удалась:"
     sed 's/^/    /' "$TMPLOG/err" | sed -n '1,40p'

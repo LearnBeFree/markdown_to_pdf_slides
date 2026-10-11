@@ -22,9 +22,11 @@
 #import "slides-theme.typ": *
 
 #let _accent-raw = "$if(accent-color)$$accent-color$$endif$"
+#let _focus-accent-raw = "$if(focus-accent)$$focus-accent$$endif$"
 #let _title-font-raw = "$if(title-font)$$title-font$$endif$"
 #let _body-font-raw = "$if(body-font)$$body-font$$endif$"
 #let _cover-raw = "$if(cover-image)$$cover-image$$endif$"
+#let _cover-fmt-raw = "$if(cover-format)$$cover-format$$endif$"
 #let _aspect-raw = "$if(aspect-ratio)$$aspect-ratio$$else$16-9$endif$"
 #let _progress-raw = "$if(progress-bar)$$progress-bar$$endif$"
 #let _dark-raw = "$if(dark_theme)$$dark_theme$$endif$"
@@ -32,6 +34,7 @@
 #show: slides-theme.with(
   aspect-ratio: _aspect-raw,
   accent: _accent-raw,
+  focus-accent: _focus-accent-raw,
   title-font: _title-font-raw,
   body-font: _body-font-raw,
   progress-bar: _progress-raw,
@@ -51,6 +54,9 @@
 )
 
 // Custom title slide (always rendered; cover image is optional).
-#title-slide(cover-image: if _cover-raw != "" { _cover-raw } else { none })
+#title-slide(
+  cover-image: if _cover-raw != "" { _cover-raw } else { none },
+  cover-format: if _cover-fmt-raw != "" { _cover-fmt-raw } else { auto },
+)
 
 $body$

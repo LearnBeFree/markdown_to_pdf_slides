@@ -1,0 +1,9 @@
+  error: unclosed delimiter
+     ┌─ tests/.work/20-fail-typst/deck.typ:65:12
+     │
+  65 │ #focus-slide[незакрытый блок
+     │             ^
+  
+slides: ОШИБКА: typst не смог собрать PDF (подробности выше). Если ошибка указывает на строку .typ — скорее всего, в деке есть блок ```{=typst} с опечаткой.
+slides: ОШИБКА: сгенерированный Typst сохранён: <<WORK>>/20-fail-typst/deck.typ
+slides: ОШИБКА: ручная пересборка для отладки: typst compile --root '/' '<<WORK>>/20-fail-typst/deck.typ'

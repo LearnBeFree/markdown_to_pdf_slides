@@ -1,0 +1,5 @@
+# build staging (tests/run.sh regenerates it)
+tests/.work/
+
+# temp deck copies created next to sources by build.sh
+.slides-deck.*
