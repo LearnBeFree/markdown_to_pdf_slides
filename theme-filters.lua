@@ -2,12 +2,14 @@
 --
 -- Markdown semantics (the user controls slide breaks):
 --   #  H1   -> #section-slide[Name]                       (divider slide;
---              image paragraphs directly under the H1 become its
---              full-bleed background, like the title-slide cover)
+--              a LONE image paragraph directly under the H1 becomes its
+--              full-bleed background; several images are a gallery after
+--              the divider)
 --   ## H2  -> #content-slide(title: [...], ...)           (new slide)
 --              ...UNLESS the slide has no text: an empty H2 becomes a
---              #focus-slide[Title] (statement slide), and an H2 followed
---              only by images becomes a focus slide with a background
+--              #focus-slide[Title] (statement slide), an H2 followed by
+--              a single image becomes a focus slide with a background,
+--              and an H2 followed by 2+ images becomes a gallery
 --   ---    -> split: a new #content-slide with the SAME   (no marker)
 --              title and section as the current one
 --   ### H3+ -> bold paragraph inside the current slide
@@ -23,13 +25,12 @@
 -- IMAGES: this filter does NO filesystem I/O. build.sh probes the AST
 -- (image-probe.lua), resolves every reference with bash (Unicode-safe on
 -- Windows, unlike Lua io.open), sniffs the real format from magic bytes and
--- delivers the results via --metadata argv (the one Unicode-safe channel
--- into native pandoc):
---   image-map:      records "src \30 typst-path \30 format" joined with \31
---   missing-images: records "src \30 reason" joined with \31
--- (Lua escapes are DECIMAL: \30 = record separator, \31 = unit separator —
--- matching bash's octal $'\036' / $'\037'. Control characters cannot occur
--- in filenames, so the encoding is unambiguous.) Missing/unreadable images degrade to a dashed placeholder
+-- delivers the results via a YAML --metadata-file (a second file next to
+-- the lifted frontmatter; argv metadata would risk MSYS path mangling and
+-- command-line length limits on Windows):
+--   image-map:      YAML list of ["src", "typst-path", "format"] triples
+--   missing-images: YAML list of ["src", "reason"] pairs
+-- Missing/unreadable images degrade to a dashed placeholder
 -- box plus a stderr warning instead of a compile error; the explicit
 -- `format:` argument makes extensions (missing or lying) irrelevant.
 
@@ -46,29 +47,47 @@ end
 local IMAGE_MAP = {}   -- src -> { path = "...", format = "png|jpg|..." }
 local IMAGE_MISS = {}  -- src -> reason string
 
-local function split_records(joined, fn)
-  for rec in joined:gmatch("[^\31]+") do
-    local a, b, c = rec:match("^([^\30]*)\30([^\30]*)\30?([^\30]*)")
-    fn(a, b, c)
-  end
+-- must run BEFORE any image lookup (feeds the map from build.sh's probe).
+-- Values arrive percent-encoded (every byte as %XX): pandoc parses
+-- metadata-file strings as markdown inlines, and a raw filename like
+-- king_of_Assyria.jpg would lose its underscores to emphasis parsing.
+-- Byte-wise decoding is UTF-8-safe (Lua strings are byte strings).
+local function pct_decode(s)
+  return (s:gsub("%%(%x%x)", function(h) return string.char(tonumber(h, 16)) end))
 end
-
--- must run BEFORE any image lookup (feeds the map from build.sh's probe)
 local function ingest_manifest(meta)
-  local m = meta["image-map"]
+  -- values coming from a --metadata-file surface in Lua as pandoc.List
+  -- (utils.type == "List"); plain --metadata argv would give a string
+  local function as_list(v)
+    if v == nil then return nil end
+    local t = pandoc.utils.type(v)
+    if t == "List" or t == "MetaList" then return v end
+    return nil
+  end
+  local function field(rec, i)
+    if rec[i] == nil then return "" end
+    return pct_decode(pandoc.utils.stringify(rec[i]))
+  end
+  local m = as_list(meta["image-map"])
   if m then
-    split_records(pandoc.utils.stringify(m), function(src, path, fmt)
-      if src ~= "" and path ~= "" then
-        IMAGE_MAP[src] = { path = path, format = (fmt ~= "" and fmt or nil) }
+    for _, rec in ipairs(m) do
+      if type(rec) == "table" and #rec >= 2 then
+        local src, path, fmt = field(rec, 1), field(rec, 2), field(rec, 3)
+        if src ~= "" and path ~= "" then
+          IMAGE_MAP[src] = { path = path, format = (fmt ~= "" and fmt or nil) }
+        end
       end
-    end)
+    end
     meta["image-map"] = nil
   end
-  m = meta["missing-images"]
+  m = as_list(meta["missing-images"])
   if m then
-    split_records(pandoc.utils.stringify(m), function(src, why)
-      if src ~= "" then IMAGE_MISS[src] = (why ~= "" and why or "не найден") end
-    end)
+    for _, rec in ipairs(m) do
+      if type(rec) == "table" and #rec >= 1 then
+        local src, why = field(rec, 1), field(rec, 2)
+        if src ~= "" then IMAGE_MISS[src] = (why ~= "" and why or "не найден") end
+      end
+    end
     meta["missing-images"] = nil
   end
 end
@@ -286,15 +305,16 @@ function Pandoc(doc)
   end
 
   -- The pending H1 divider: emitted deferred, once we know whether image
-  -- paragraphs follow it directly (they become its background).
+  -- paragraphs follow it directly (a LONE image becomes its background;
+  -- two or more are a gallery after the divider — same rule as under an H2).
   local function finalize_section()
     if not pending_section then return end
     local a
-    if pending_section.bg then
-      a = bg_args(pending_section.bg)
+    if #pending_section.extra == 1 then
+      a = bg_args(pending_section.extra[1].path)
       if not a then
-        local _, why = lookup_image(pending_section.bg)
-        io.stderr:write("slides: ВНИМАНИЕ: картинка ", pending_section.bg,
+        local _, why = lookup_image(pending_section.extra[1].path)
+        io.stderr:write("slides: ВНИМАНИЕ: картинка ", pending_section.extra[1].path,
           " — ", why, " — фон разделителя не установлен\n")
       end
     end
@@ -304,7 +324,7 @@ function Pandoc(doc)
       out[#out + 1] = "#section-slide[" .. pending_section.name .. "]"
     end
     toc_entries[#toc_entries + 1] = { level = 1, text = pending_section.name }
-    if #pending_section.extra > 0 then
+    if #pending_section.extra >= 2 then
       local ims = {}
       for _, im in ipairs(pending_section.extra) do
         local d = image_dict(im)
@@ -323,13 +343,15 @@ function Pandoc(doc)
       body_blocks, images = {}, {}
       return
     end
-    -- Statement slide: an H2 whose slide has no text (nothing at all, or
-    -- images only) becomes a focus slide; a lone image is its background.
-    if title ~= nil and not emitted_for_title and #body_blocks == 0 then
+    -- Statement slide: an H2 whose slide has no text AT ALL is a focus
+    -- slide, and a LONE image under it becomes the focus background.
+    -- Two or more images under an H2 are a GALLERY (README: "две и
+    -- больше картинок подряд → слайд-галерея") — none of them may be
+    -- hijacked as a background; they fall through to the gallery branch.
+    if title ~= nil and not emitted_for_title and #body_blocks == 0 and #images <= 1 then
       local bg = nil
-      if #images >= 1 then bg = table.remove(images, 1) end
+      if #images == 1 then bg = table.remove(images, 1) end
       emit_focus(bg and bg.path or nil)
-      if #images > 0 then emit_gallery() end
       body_blocks, images = {}, {}
       emitted_for_title = true
       return
@@ -352,7 +374,7 @@ function Pandoc(doc)
         flush(true)
         finalize_section()
         local name = ser_inlines(b.content)
-        pending_section = { name = name, bg = nil, extra = {} }
+        pending_section = { name = name, extra = {} }
         after_h1 = true
         section, title = name, nil
       elseif b.level == 2 then
@@ -379,15 +401,13 @@ function Pandoc(doc)
     else
       local tiles = as_image_tiles(b)
       if #tiles > 0 and after_h1 then
-        -- image paragraphs directly under the H1: divider background(s)
+        -- image paragraphs directly under the H1: divider background (if
+        -- the image ends up alone) or gallery (if there are several — the
+        -- decision is deferred to finalize_section)
         for _, tile in ipairs(tiles) do
           local hit, why = lookup_image(tile.path)
           if hit then
-            if not pending_section.bg then
-              pending_section.bg = tile.path
-            else
-              pending_section.extra[#pending_section.extra + 1] = tile
-            end
+            pending_section.extra[#pending_section.extra + 1] = tile
           else
             io.stderr:write("slides: ВНИМАНИЕ: картинка ", tile.path,
               " — ", why, " — фон разделителя не установлен\n")

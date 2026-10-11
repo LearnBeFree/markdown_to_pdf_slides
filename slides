@@ -88,6 +88,9 @@ doctor() {
           echo "  WARN  шрифт $f не виден typst — проверьте каталог fonts/"; bad=$((bad+1))
         fi
       done
+      local repo
+      repo="$(typst fonts --ignore-system-fonts --font-path "$SCRIPT_DIR/fonts" 2>/dev/null | paste -sd, -)"
+      [ -n "$repo" ] && echo "  note  fonts/ даёт семейства: $repo"
     fi
   fi
   if git -C "$SCRIPT_DIR" rev-parse --git-dir >/dev/null 2>&1; then
@@ -100,7 +103,7 @@ doctor() {
   echo "── тестовая сборка example.md ─────────────────────"
   sample="$(mktemp -d)"
   cp "$SCRIPT_DIR/example.md" "$sample/" 2>/dev/null || true
-  cp -r "$SCRIPT_DIR/assets" "$sample/" 2>/dev/null || true
+  cp -r "$SCRIPT_DIR/example_assets" "$sample/" 2>/dev/null || true
   if [ ! -f "$sample/example.md" ]; then
     echo "  note  example.md не найден — пропускаю"
   elif "$SCRIPT_DIR/build.sh" "$sample/example.md" >/dev/null 2>"$sample/err"; then

@@ -9,6 +9,16 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# SLIDES_DEBUG=1 prints every pipeline decision (fonts, image resolution,
+# the exact typst invocation) — the first thing to ask for in bug reports.
+SLIDES_DEBUG="${SLIDES_DEBUG:-0}"
+dbg() {
+  if [ "$SLIDES_DEBUG" = 1 ]; then
+    printf 'slides: DEBUG: %s\n' "$*" >&2
+  fi
+  return 0
+}
+
 warn() { printf 'slides: ВНИМАНИЕ: %s\n' "$*" >&2; WARN_COUNT=$((WARN_COUNT + 1)); }
 err()  { printf 'slides: ОШИБКА: %s\n' "$*" >&2; }
 WARN_COUNT=0
@@ -65,11 +75,13 @@ require_tools() {
   command -v typst >/dev/null 2>&1 \
     || { err "typst не установлен — см. README «Установка»"; exit 1; }
   pv="$(pandoc --version 2>/dev/null | head -1 | awk '{print $2}')"
+  pv="${pv%$'\r'}"
   case "$pv" in
     3.*) ;;
     *)  warn "pandoc ${pv:-неизвестной версии} — конвейер тестировался с pandoc 3.x" ;;
   esac
   tv="$(typst --version 2>/dev/null | awk '{print $2}')"
+  tv="${tv%$'\r'}"
   case "$tv" in
     0.14.*|0.15.*) ;;
     *)  warn "typst ${tv:-неизвестной версии} — тема тестировалась с typst 0.14–0.15" ;;
@@ -243,26 +255,74 @@ KEEP_WORK=0
 trap 'rm -f "$DECK_MD"; if [ "$KEEP_WORK" = 0 ]; then rm -rf "$WORK_DIR"; fi' EXIT
 
 # --- deck font availability -----------------------------------------------------
-# The theme falls back silently inside typst; this makes the substitution
-# visible ONCE, up front. typst then repeats its own "unknown font family"
-# warning at every usage site — those duplicates are filtered out of the
-# compile output below (only for families already reported here).
+# typst matches fonts by the FAMILY name DECLARED INSIDE the font file, not
+# by filename — the classic trap is `title-font: TapeBold` when TapeBold.ttf
+# actually declares the family «Tape». A miss is reported with the REAL
+# family name (learned by asking typst about that exact file), so the fix is
+# spelled out in the warning itself. typst then repeats its own "unknown
+# font family" warning at every usage site — those duplicates are filtered
+# out of the compile output below (only for families already reported here).
 FONT_MISS_LIST=""
+fm_norm() { # fuzzy key for filename matching: case, spaces and _ - ignored
+  printf '%s' "$1" | tr -d ' \t_-' | tr '[:upper:]' '[:lower:]'
+}
+fm_file_family() { # $1 = font file -> real family name(s), one per line
+  # typst always lists its EMBEDDED fonts (Libertinus, New CM, DejaVu) —
+  # subtract that baseline so only families from the file itself remain
+  local d base
+  d="$(mktemp -d "${TMPDIR:-/tmp}/slides-font.XXXXXX")" || return 1
+  cp -f "$1" "$d/" 2>/dev/null || { rm -rf "$d"; return 1; }
+  base="$(typst fonts --ignore-system-fonts 2>/dev/null || true)"
+  { typst fonts --ignore-system-fonts --font-path "$d" 2>/dev/null || true; } \
+    | grep -vxF -f <(printf '%s\n' "$base") || true
+  rm -rf "$d"
+}
 check_deck_fonts() {
   command -v typst >/dev/null 2>&1 || return 0
-  [ -d "$SCRIPT_DIR/fonts" ] || return 0
   [ -s "$FM_FILE" ] || return 0
-  local avail fam
-  avail="$(typst fonts --font-path "$SCRIPT_DIR/fonts" 2>/dev/null || true)"
-  [ -n "$avail" ] || return 0
+  local avail fam stem hit families f nreq
+  if [ -d "$SCRIPT_DIR/fonts" ]; then
+    avail="$(typst fonts --font-path "$SCRIPT_DIR/fonts" 2>/dev/null || true)"
+    dbg "шрифты: ищу по fonts/ + системным (typst fonts --font-path fonts)"
+  else
+    avail="$(typst fonts 2>/dev/null || true)"
+    dbg "шрифты: каталога fonts/ нет — ищу только по системным шрифтам"
+  fi
+  [ -n "$avail" ] || { dbg "шрифты: typst fonts не дал список — проверка пропущена"; return 0; }
   while IFS= read -r fam; do
     [ -n "$fam" ] || continue
-    printf '%s\n' "$avail" | grep -qixF "$fam" || {
-      warn "шрифт «$fam» (frontmatter) не найден ни в fonts/, ни в системе — тема подставит запасной"
-      FONT_MISS_LIST+="$fam"$'\n'
-    }
+    if printf '%s\n' "$avail" | grep -qixF "$fam"; then
+      dbg "шрифты: «$fam» — найден"
+      continue
+    fi
+    # family is declared nowhere: maybe the user named the FILE
+    # (TapeBold.ttf) instead of the family inside it (Tape)
+    hit=""
+    if [ -d "$SCRIPT_DIR/fonts" ]; then
+      nreq="$(fm_norm "$fam")"
+      if [ -n "$nreq" ]; then
+        for f in "$SCRIPT_DIR/fonts"/*; do
+          [ -f "$f" ] || continue
+          case "$f" in *.ttf|*.otf|*.ttc|*.TTF|*.OTF|*.TTC) ;; *) continue ;; esac
+          stem="$(basename "$f")"; stem="${stem%.*}"
+          if [ "$(fm_norm "$stem")" = "$nreq" ]; then hit="$f"; break; fi
+        done
+      fi
+    fi
+    if [ -n "$hit" ]; then
+      families="$(fm_file_family "$hit" | grep -v '^[[:space:]]*$' | head -3 \
+        | paste -sd, -)"
+      if [ -n "$families" ]; then
+        warn "шрифт «$fam» не найден: файл $(basename "$hit") есть в fonts/, но его семейство называется «$families» — укажите в frontmatter именно это имя"
+      else
+        warn "шрифт «$fam» не найден: файл $(basename "$hit") есть в fonts/, но typst не смог прочитать его семейство (файл битый?)"
+      fi
+    else
+      warn "шрифт «$fam» (frontmatter) не найден ни в fonts/, ни в системе — тема подставит запасной (имя шрифта — это СЕМЕЙСТВО из файла, а не имя файла; список: typst fonts --font-path fonts)"
+    fi
+    FONT_MISS_LIST+="$fam"$'\n'
   done < <(sed -nE 's/^[[:space:]]*(title-font|body-font):[[:space:]]*//p' "$FM_FILE" \
-    | tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; s/^"//; s/"$//' | sort -u)
+    | tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; s/^"//; s/"$//; s/^'\''//; s/'\''$//' | sort -u)
 }
 check_deck_fonts
 
@@ -277,9 +337,11 @@ fi
 # filesystem and sniffs the real format from magic bytes. Bash (not Lua)
 # does all file I/O: on Windows, Lua's io.open inside native pandoc.exe
 # goes through the ANSI code page and cannot see non-ASCII (UTF-8) paths.
-# Results travel to the main Lua filter via --metadata argv — the one
-# Unicode-safe channel into pandoc — joined with \037 (records) and \036
-# (fields): control characters cannot occur in filenames.
+# The verified results travel to the main Lua filter via a YAML
+# --metadata-file (image-map: [[src, path, fmt], ...]; missing-images:
+# [[src, why], ...]) — NOT via --metadata argv: on Windows, MSYS may
+# rewrite arguments that look like POSIX paths, and a big deck would hit
+# the 32 KiB CreateProcess command-line limit. A file sidesteps both.
 
 pct_decode() { # full %XX decoding, incl. UTF-8 byte sequences
   local s=$1
@@ -383,26 +445,48 @@ PROBE="$(pandoc "$DECK_MD" \
   --lua-filter "$SCRIPT_DIR/image-probe.lua" \
   "${FM_ARGS[@]}" || true)"
 
-MAP_FILE="$WORK_DIR/imgmap.txt"
-MISS_FILE="$WORK_DIR/imgmiss.txt"
-: > "$MAP_FILE"; : > "$MISS_FILE"
+# pandoc parses --metadata-file strings as MARKDOWN INLINES, so a filename
+# like king_of_Assyria.jpg would come back emphasis-mangled (underscores
+# dropped). Percent-encoding EVERY byte makes the value inert ([A-Za-z0-9
+# ./%-] survives inline parsing verbatim); the Lua filter decodes it back.
+enc() { # %s -> %-escaped ASCII (byte-exact, UTF-8-safe)
+  printf '%s' "$1" | od -An -tx1 | tr -d ' \n' | sed -E 's/(..)/%\1/g'
+}
+
+META_YAML="$WORK_DIR/imgmeta.yaml"
+MAP_PART="$WORK_DIR/imgmap.part"
+MISS_PART="$WORK_DIR/imgmiss.part"
+: > "$META_YAML"; : > "$MAP_PART"; : > "$MISS_PART"
 while IFS= read -r line; do
   case "$line" in IMG:*|COVER:*) ref="${line#*:}" ;; *) continue ;; esac
+  ref="${ref%$'\r'}"   # some Windows pandoc builds emit CRLF on pipes
   [ -n "$ref" ] || continue
   if resolve_ref "$ref"; then
-    printf '%s\036%s\036%s\n' "$ref" "$(to_typst_virtual "$R_path")" "$R_fmt" >> "$MAP_FILE"
+    printf '  - ["%s", "%s", "%s"]\n' \
+      "$(enc "$ref")" \
+      "$(enc "$(to_typst_virtual "$R_path")")" \
+      "$(enc "$R_fmt")" >> "$MAP_PART"
+    dbg "картинка: $ref — найдена ($R_fmt)"
   else
-    printf '%s\036%s\n' "$ref" "$R_why" >> "$MISS_FILE"
+    printf '  - ["%s", "%s"]\n' "$(enc "$ref")" "$(enc "$R_why")" >> "$MISS_PART"
+    dbg "картинка: $ref — НЕ найдена: $R_why"
   fi
 done <<< "$PROBE"
-
-MAP_ARGS=()
-if [ -s "$MAP_FILE" ]; then
-  MAP_ARGS=(--metadata "image-map=$(paste -sd $'\037' "$MAP_FILE")")
+# the two sections are concatenated only after the loop: interleaved
+# found/missing refs must never mix records under one YAML key
+if [ -s "$MAP_PART" ]; then
+  printf 'image-map:\n' >> "$META_YAML"
+  cat "$MAP_PART" >> "$META_YAML"
 fi
-MISS_ARGS=()
-if [ -s "$MISS_FILE" ]; then
-  MISS_ARGS=(--metadata "missing-images=$(paste -sd $'\037' "$MISS_FILE")")
+if [ -s "$MISS_PART" ]; then
+  printf 'missing-images:\n' >> "$META_YAML"
+  cat "$MISS_PART" >> "$META_YAML"
+fi
+dbg "картинки: найдено $(wc -l < "$MAP_PART"), не найдено $(wc -l < "$MISS_PART")"
+rm -f "$MAP_PART" "$MISS_PART"
+META_ARGS=()
+if [ -s "$META_YAML" ]; then
+  META_ARGS=(--metadata-file "$META_YAML")
 fi
 
 # Extension tweaks:
@@ -417,8 +501,7 @@ fi
 #                                     real images the filter can lay out
 PAN_ERR="$WORK_DIR/pandoc.err"
 if ! pandoc "$DECK_MD" \
-    "${MAP_ARGS[@]}" \
-    "${MISS_ARGS[@]}" \
+    "${META_ARGS[@]}" \
     --from "markdown-yaml_metadata_block-raw_tex-blank_before_header-multiline_tables-simple_tables+wikilinks_title_after_pipe" \
     --to typst \
     --standalone \
@@ -437,6 +520,7 @@ fi
 # The filter emits root-relative image paths and the staged .typ sits next
 # to its theme copy, so root covers everything (Unix: "/", Windows: "E:/").
 TYP_ERR="$WORK_DIR/typst.err"
+dbg "typst: compile --root '$ROOT' ${FONT_ARGS[*]} '$TYP'"
 if ! typst compile --root "$ROOT" "${FONT_ARGS[@]}" "$TYP" "$PDF" 2> "$TYP_ERR"; then
   KEEP_WORK=1
   sed 's/^/  /' "$TYP_ERR" >&2

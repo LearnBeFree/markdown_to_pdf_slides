@@ -131,6 +131,7 @@ check_fonts() {
     ok "шрифты на месте (Oswald, Philosopher + шрифты деки)"
   else
     warn "шрифты не найдены: ${missing[*]}"
+    warn "имя шрифта — это СЕМЕЙСТВО из файла, а не имя файла (TapeBold.ttf может объявлять семейство «Tape»); список: typst fonts --font-path fonts"
     warn "тема сама подставит запасные (Liberation/системные) — сборка не сломается"
   fi
 }
